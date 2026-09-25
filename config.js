@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────
 window.APP_CONFIG = {
   // "Id. de aplicación (cliente)" que te da Microsoft al registrar la app
-  CLIENT_ID: "",
+  CLIENT_ID: "9782eaae-259f-452a-8cfe-e54a0c74195d",
 
   // "consumers" = cuentas personales de Microsoft (Outlook/Hotmail/Live o Gmail registrado en Microsoft).
   // Usa "common" si tu OneDrive es de trabajo/escuela.
