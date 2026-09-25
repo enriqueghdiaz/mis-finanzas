@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f5c4d">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Mis Finanzas</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="topbar-title">
+      <h1 id="viewTitle">Inicio</h1>
+      <button id="syncBadge" class="sync-badge" type="button" aria-live="polite">—</button>
+    </div>
+    <button id="btnSettings" class="icon-btn" type="button" aria-label="Ajustes">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1 0)"/></svg>
+    </button>
+  </header>
+
+  <main id="main">
+    <section id="view-login" class="view" hidden></section>
+    <section id="view-inicio" class="view" hidden></section>
+    <section id="view-movimientos" class="view" hidden></section>
+    <section id="view-presupuesto" class="view" hidden></section>
+    <section id="view-analisis" class="view" hidden></section>
+    <section id="view-patrimonio" class="view" hidden></section>
+  </main>
+
+  <button id="fab" class="fab" type="button" aria-label="Nuevo movimiento" hidden>
+    <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+  </button>
+
+  <nav class="tabbar" id="tabbar" hidden>
+    <button data-view="inicio" class="tab active" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3 3 10.5V21h6v-6h6v6h6V10.5z"/></svg><span>Inicio</span></button>
+    <button data-view="movimientos" class="tab" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg><span>Movimientos</span></button>
+    <button data-view="presupuesto" class="tab" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 4v12h14V7Zm2 2h4v2H7zm0 4h4v2H7zm6-4h4v2h-4zm0 4h4v2h-4z"/></svg><span>Presupuesto</span></button>
+    <button data-view="analisis" class="tab" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 20V10h3v10zm6.5 0V4h3v16zM17 20v-7h3v7z"/></svg><span>Análisis</span></button>
+    <button data-view="patrimonio" class="tab" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 2 7v2h20V7zM4 11v7h3v-7zm6.5 0v7h3v-7zM17 11v7h3v-7zM2 20h20v2H2z"/></svg><span>Patrimonio</span></button>
+  </nav>
+
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-backdrop" data-close></div>
+    <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <div class="sheet-grip"></div>
+      <div class="sheet-head">
+        <h2 id="sheetTitle"></h2>
+        <button class="icon-btn" data-close type="button" aria-label="Cerrar">✕</button>
+      </div>
+      <div id="sheetBody" class="sheet-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="tooltip" class="chart-tip" hidden></div>
+</div>
+
+<script src="config.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/excel.js"></script>
+<script src="js/demo.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
