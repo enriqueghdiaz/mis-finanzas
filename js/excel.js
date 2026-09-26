@@ -45,8 +45,9 @@
 
   // ── Proveedor Microsoft Graph ──────────────────────────────
   class GraphProvider {
-    constructor(fileId) { this.fileId = fileId; this.session = null; this.kind = "graph"; }
-    get base() { return `${GRAPH}/me/drive/items/${this.fileId}/workbook`; }
+    constructor(fileId, driveId) { this.fileId = fileId; this.driveId = driveId || null; this.session = null; this.kind = "graph"; }
+    get item() { return this.driveId ? `${GRAPH}/drives/${this.driveId}/items/${this.fileId}` : `${GRAPH}/me/drive/items/${this.fileId}`; }
+    get base() { return this.item + "/workbook"; }
     static async call(method, url, body, extraHeaders) {
       for (let attempt = 0; attempt < 4; attempt++) {
         const token = await Auth.getToken();
@@ -97,15 +98,36 @@
     async updateTableRow(name, index, row) { await this.req("PATCH", `${this.tbl(name)}/rows/itemAt(index=${index})`, { values: [row] }); }
     async deleteTableRow(name, index) { await this.req("DELETE", `${this.tbl(name)}/rows/itemAt(index=${index})`); }
     async info() {
-      return GraphProvider.call("GET", `${GRAPH}/me/drive/items/${this.fileId}?$select=id,name,webUrl,lastModifiedDateTime`);
+      return GraphProvider.call("GET", `${this.item}?$select=id,name,webUrl,lastModifiedDateTime`);
     }
     static async searchFiles(q) {
       const j = await GraphProvider.call("GET", `${GRAPH}/me/drive/root/search(q='${encodeURIComponent(q.replace(/'/g, "''"))}')?$select=id,name,webUrl,lastModifiedDateTime,parentReference&$top=50`);
       return (j.value || []).filter(f => /\.xls[xm]$/i.test(f.name));
     }
     static async byPath(path) {
-      const clean = path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
-      return GraphProvider.call("GET", `${GRAPH}/me/drive/root:/${clean}?$select=id,name,webUrl,lastModifiedDateTime`);
+      // Admite rutas copiadas del PC (C:\Users\...\OneDrive\...) y la carpeta "Documentos" (en OneDrive se llama "Documents")
+      let p = path.trim().replace(/^["']|["']$/g, "").replace(/\\/g, "/");
+      const k = p.toLowerCase().lastIndexOf("onedrive/");
+      if (k >= 0) p = p.slice(k + 9);
+      p = p.replace(/^\/+/, "");
+      const tryPath = q => GraphProvider.call("GET", `${GRAPH}/me/drive/root:/${q.split("/").map(encodeURIComponent).join("/")}?$select=id,name,webUrl,lastModifiedDateTime,parentReference`);
+      try { return await tryPath(p); }
+      catch (e) {
+        if (/^documentos\//i.test(p)) return tryPath(p.replace(/^documentos\//i, "Documents/"));
+        if (/^documents\//i.test(p)) return tryPath(p.replace(/^documents\//i, "Documentos/"));
+        throw e;
+      }
+    }
+    static async byShareLink(url) {
+      const b = btoa(unescape(encodeURIComponent(url.trim()))).replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
+      return GraphProvider.call("GET", `${GRAPH}/shares/u!${b}/driveItem?$select=id,name,webUrl,lastModifiedDateTime,parentReference`);
+    }
+    static async recent() {
+      const j = await GraphProvider.call("GET", `${GRAPH}/me/drive/recent?$top=60`);
+      return (j.value || []).map(it => {
+        const r = it.remoteItem || it;
+        return { id: r.id, name: it.name || r.name, webUrl: it.webUrl || r.webUrl, lastModifiedDateTime: it.lastModifiedDateTime || r.lastModifiedDateTime, parentReference: r.parentReference || it.parentReference };
+      }).filter(f => /\.xls[xm]$/i.test(f.name || ""));
     }
     static async me() { return GraphProvider.call("GET", `${GRAPH}/me?$select=displayName,userPrincipalName`); }
   }
@@ -113,15 +135,46 @@
   // ── Lectura de todo el libro ───────────────────────────────
   const RANGES = { budget: "B6:AN50", balance: "B8:R31", invest: "B2:F21" };
 
+  // Comprueba paso a paso el archivo para dar un error claro si algo no cuadra
+  async function diagnose(p) {
+    let item;
+    try { item = await p.info(); }
+    catch (e) {
+      if (e instanceof Auth.AuthError) throw e;
+      if (p.driveId) { p.driveId = null; try { item = await p.info(); } catch (e2) { item = null; } }
+      if (!item) throw new Error("Paso 1 (archivo): OneDrive dice que el archivo no existe o no tienes acceso. Pulsa «Elegir otro archivo» y vuelve a seleccionarlo. Detalle: " + e.message);
+    }
+    try { await p.openSession(); }
+    catch (e) {
+      if (e instanceof Auth.AuthError) throw e;
+      throw new Error(`Paso 2 (abrir el libro «${item.name}»): OneDrive no deja abrirlo con la API de Excel. Suele pasar con archivos .xlsm o muy pesados. Prueba a borrar la columna I de «BDD P&G» o a guardarlo como .xlsx. Detalle: ${e.message}`);
+    }
+    let sheets = [], tables = [];
+    try { sheets = ((await p.req("GET", "/worksheets?$select=name")).value || []).map(x => x.name); } catch (e) { throw new Error("Paso 3 (leer hojas): " + e.message); }
+    try { tables = ((await p.req("GET", "/tables?$select=name")).value || []).map(x => x.name); } catch (e) { throw new Error("Paso 3 (leer tablas): " + e.message); }
+    return { item, sheets, tables };
+  }
+
   async function loadRaw(p) {
     const S = window.APP_CONFIG.SHEETS;
-    const [tx, budget, balance, invest] = await Promise.all([
-      p.readTable(S.txTable),
-      p.readRange(S.budget, RANGES.budget),
-      p.readRange(S.balance, RANGES.balance),
-      p.readRange(S.invest, RANGES.invest).catch(() => null)
-    ]);
-    return { tx, budget, balance, invest, loadedAt: new Date().toISOString() };
+    const warnings = [];
+    let sheets = null, tables = null;
+    if (p.kind === "graph") {
+      const d = await diagnose(p); sheets = d.sheets; tables = d.tables;
+      const tbl = tables.find(t => t.toLowerCase() === S.txTable.toLowerCase());
+      if (!tbl) throw new Error(`En «${d.item.name}» no encuentro la tabla «${S.txTable}» (la de los movimientos). Tablas que hay: ${tables.join(", ") || "ninguna"}. ¿Es la versión correcta del archivo?`);
+      S.txTable = tbl;
+      ["budget", "balance", "invest"].forEach(k => {
+        const hit = sheets.find(n => n.trim().toLowerCase() === S[k].trim().toLowerCase());
+        if (hit) S[k] = hit; else warnings.push(S[k]);
+      });
+      if (warnings.includes(S.budget)) throw new Error(`En «${d.item.name}» no encuentro la hoja «${S.budget}». Hojas que hay: ${sheets.join(", ")}.`);
+    }
+    const opt = (k, rng) => (sheets && !sheets.includes(S[k])) ? Promise.resolve(null) : p.readRange(S[k], rng).catch(e => { warnings.push(S[k] + ": " + e.message); return null; });
+    const tx = await p.readTable(S.txTable).catch(e => { throw new Error(`Leyendo la tabla «${S.txTable}»: ${e.message}`); });
+    const budget = await p.readRange(S.budget, RANGES.budget).catch(e => { throw new Error(`Leyendo la hoja «${S.budget}» (${RANGES.budget}): ${e.message}`); });
+    const [balance, invest] = await Promise.all([opt("balance", RANGES.balance), opt("invest", RANGES.invest)]);
+    return { tx, budget, balance, invest, warnings, loadedAt: new Date().toISOString() };
   }
 
   // ── Traducción a modelo ────────────────────────────────────
@@ -278,7 +331,8 @@
     const year = budget.months.length ? +budget.months[0].key.slice(0, 4) : new Date().getFullYear();
     return {
       tx, budget,
-      balance: parseBalance(raw.balance, year),
+      balance: raw.balance ? parseBalance(raw.balance, year) : { months: [], sections: [] },
+      warnings: raw.warnings || [],
       invest: parseInvest(raw.invest),
       loadedAt: raw.loadedAt
     };

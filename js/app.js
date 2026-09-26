@@ -53,7 +53,7 @@
     if (!Auth.isSignedIn()) return showLogin();
     if (!st.fileId) return showFilePicker();
     S.mode = "graph";
-    S.provider = new Excel.GraphProvider(st.fileId);
+    S.provider = new Excel.GraphProvider(st.fileId, st.driveId);
     S.file = { name: st.fileName, webUrl: st.fileUrl };
     S.queue = LS.get("fin_queue") || [];
     const cache = LS.get("fin_cache");
@@ -80,6 +80,7 @@
       S.model = Excel.build(raw);
       if (S.mode === "graph") LS.set("fin_cache", { fileId: settings().fileId, raw });
       setStatus("ok", S.mode === "demo" ? "Demo" : "Al día · " + new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }));
+      if (S.model.warnings.length) toast("Aviso: no he podido leer " + S.model.warnings.join(" · "), 6000);
       render();
     } catch (e) { handleError(e); if (!S.model) renderError(e); }
   }
@@ -89,7 +90,7 @@
     if (e instanceof Auth.AuthError) { setStatus("err", "Inicia sesión"); return; }
     if (!navigator.onLine || e instanceof TypeError) { setStatus("pending", S.queue.length ? `Sin conexión · ${S.queue.length} pendiente(s)` : "Sin conexión"); return; }
     setStatus("err", "Error de sincronización");
-    toast(e.message, 5000);
+    if (S.model) toast(e.message, 5000);
   }
 
   // ── Cola de cambios (funciona sin conexión) ───────────────
@@ -191,6 +192,7 @@
     render();
   }
   function renderError(e) {
+    $("#viewTitle").textContent = "Mis Finanzas";
     const v = $("#view-" + S.view); $$(".view").forEach(x => x.hidden = true); v.hidden = false;
     v.innerHTML = `<div class="alert err"><span class="i">!</span><div><b>No he podido leer el Excel.</b><br>${esc(e.message)}</div></div>
       <button class="btn" id="retry">Reintentar</button><button class="btn secondary" id="chg">Elegir otro archivo</button>`;
@@ -550,6 +552,7 @@
 
   function renderBalance(v) {
     const bal = S.model.balance, nw = netWorthSeries();
+    if (!bal.months.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = `No he podido leer la hoja «${window.APP_CONFIG.SHEETS.balance}» del Excel.`; v.appendChild(e); return; }
     const withData = nw.filter(x => x.v != null);
     if (S.balMonth == null || !withData.find(x => x.x === S.balMonth)) S.balMonth = withData.length ? withData[withData.length - 1].x : 0;
     const cur = nw[S.balMonth], prev = withData.filter(x => x.x < S.balMonth).pop();
@@ -804,28 +807,41 @@
     v.innerHTML = `<div class="card"><h3>Buscando en tu OneDrive…</h3><div class="spinner"></div></div>`;
     let who = "";
     try { const me = await Excel.GraphProvider.me(); who = me.userPrincipalName || me.displayName; } catch (e) { if (e instanceof Auth.AuthError) return showLogin(); }
-    let files = [];
-    try { files = await Excel.GraphProvider.searchFiles(window.APP_CONFIG.FILE_SEARCH || "Finanzas"); } catch (e) { toast(e.message, 5000); }
+    const [recent, found] = await Promise.all([
+      Excel.GraphProvider.recent().catch(() => []),
+      Excel.GraphProvider.searchFiles(window.APP_CONFIG.FILE_SEARCH || "Finanzas").catch(() => [])
+    ]);
     v.innerHTML = `<p class="small muted" style="margin:0">Conectado como <b>${esc(who)}</b></p>
-      <div class="card"><h3>Selecciona el archivo de tus finanzas</h3><div class="list" id="fl"></div></div>
-      <div class="card"><h3>¿No aparece?</h3><div class="field"><label>Busca por nombre</label><input id="fq" placeholder="Finanzas"></div><button class="btn secondary" id="fs" type="button">Buscar</button>
-      <div style="height:12px"></div><div class="field"><label>o escribe la ruta dentro de OneDrive</label><input id="fp" placeholder="Documentos/20260925 Finanzas Personales.xlsm"></div><button class="btn secondary" id="fpb" type="button">Usar esta ruta</button></div>
+      <div class="card"><h3>Opción más fiable: pega el enlace</h3>
+        <p class="small muted" style="margin-top:0">En OneDrive (web o app) toca los <b>⋯</b> del archivo → <b>Compartir</b> → <b>Copiar vínculo</b>, y pégalo aquí.</p>
+        <div class="field"><input id="fl1" placeholder="https://1drv.ms/x/…  o  https://onedrive.live.com/…"></div>
+        <button class="btn" id="flb" type="button">Usar este archivo</button></div>
+      <div class="card"><h3>Abiertos recientemente</h3><div class="list" id="fr"></div></div>
+      <div class="card"><h3>Resultados de búsqueda</h3><div class="list" id="fl"></div>
+        <div class="field" style="margin-top:10px"><input id="fq" placeholder="Buscar por nombre"></div><button class="btn secondary" id="fs" type="button">Buscar</button></div>
+      <div class="card"><h3>O escribe la ruta</h3><p class="xsmall muted" style="margin-top:0">Relativa a OneDrive, p. ej. <code>Documents/20260925 Finanzas Personales.xlsm</code>. También vale la ruta copiada del PC.</p>
+        <div class="field"><input id="fp" placeholder="Carpeta/archivo.xlsm"></div><button class="btn secondary" id="fpb" type="button">Usar esta ruta</button></div>
       <button class="btn secondary" id="lo" type="button">Cerrar sesión</button>`;
-    const fill = list => {
-      const fl = $("#fl", v); fl.innerHTML = list.length ? "" : `<div class="empty">No he encontrado Excel con ese nombre.</div>`;
-      list.forEach(f => {
+    const fill = (box, list, emptyMsg) => {
+      box.innerHTML = list.length ? "" : `<div class="empty">${emptyMsg}</div>`;
+      list.slice().sort((a, b) => String(b.lastModifiedDateTime).localeCompare(String(a.lastModifiedDateTime))).forEach(f => {
         const b = document.createElement("button"); b.className = "row"; b.type = "button";
-        b.innerHTML = `<span class="ico">📗</span><span class="mid"><div class="t">${esc(f.name)}</div><div class="s">${esc((f.parentReference && f.parentReference.path || "").replace(/^\/drive\/root:?/, "") || "OneDrive")} · ${new Date(f.lastModifiedDateTime).toLocaleDateString("es-ES")}</div></span>`;
-        b.onclick = () => choose(f); fl.appendChild(b);
+        const folder = (f.parentReference && f.parentReference.path || "").replace(/^\/drive(s\/[^/]+)?\/root:?/, "") || "OneDrive";
+        b.innerHTML = `<span class="ico">📗</span><span class="mid"><div class="t">${esc(f.name)}</div><div class="s">${esc(folder)} · modificado ${new Date(f.lastModifiedDateTime).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" })}</div></span>`;
+        b.onclick = () => choose(f); box.appendChild(b);
       });
     };
-    fill(files);
-    $("#fs", v).onclick = async () => { try { fill(await Excel.GraphProvider.searchFiles($("#fq", v).value || "xls")); } catch (e) { toast(e.message); } };
-    $("#fpb", v).onclick = async () => { try { choose(await Excel.GraphProvider.byPath($("#fp", v).value)); } catch (e) { toast("No encuentro esa ruta: " + e.message, 5000); } };
+    fill($("#fr", v), recent, "No hay Excel recientes.");
+    fill($("#fl", v), found, "La búsqueda no encuentra nada (OneDrive puede tardar en indexar archivos nuevos).");
+    $("#flb", v).onclick = async () => { const u = $("#fl1", v).value.trim(); if (!u) return toast("Pega el enlace"); try { choose(await Excel.GraphProvider.byShareLink(u)); } catch (e) { toast("No puedo abrir ese enlace: " + e.message, 6000); } };
+    $("#fs", v).onclick = async () => { try { fill($("#fl", v), await Excel.GraphProvider.searchFiles($("#fq", v).value || "xls"), "Sin resultados."); } catch (e) { toast(e.message); } };
+    $("#fpb", v).onclick = async () => { try { choose(await Excel.GraphProvider.byPath($("#fp", v).value)); } catch (e) { toast("No encuentro esa ruta: " + e.message, 6000); } };
     $("#lo", v).onclick = () => { Auth.logout(); showLogin(); };
     function choose(f) {
-      saveSettings({ fileId: f.id, fileName: f.name, fileUrl: f.webUrl, mode: "graph" });
+      if (!/\.xls[xm]$/i.test(f.name || "")) return toast("Eso no parece un Excel: " + (f.name || ""));
+      saveSettings({ fileId: f.id, driveId: f.parentReference && f.parentReference.driveId || null, fileName: f.name, fileUrl: f.webUrl, mode: "graph" });
       LS.del("fin_cache"); LS.del("fin_queue");
+      toast("Conectado a " + f.name);
       S.model = null; start();
     }
   }
@@ -847,12 +863,12 @@
         <p class="xsmall muted">Dirección de redirección: <code>${esc(Auth.redirectUri())}</code></p>
         <button class="btn secondary" id="sSaveC" type="button">Guardar</button></details>
       <button class="btn danger" id="sOut" type="button">${S.mode === "demo" ? "Salir del modo demo" : "Cerrar sesión"}</button>
-      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.0</p>`;
+      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.2</p>`;
     $("#sTheme", body).value = st.theme || "auto";
     $("#sTheme", body).onchange = e => { saveSettings({ theme: e.target.value }); applyTheme(); render(); };
     $("#sAuth", body).value = Auth.cfg().authority;
     $("#sRef", body).onclick = () => { closeSheet(); refresh(); };
-    if ($("#sFile", body)) $("#sFile", body).onclick = () => { closeSheet(); saveSettings({ fileId: null }); showFilePicker(); };
+    if ($("#sFile", body)) $("#sFile", body).onclick = () => { closeSheet(); saveSettings({ fileId: null, driveId: null }); showFilePicker(); };
     $("#sSaveC", body).onclick = () => { saveSettings({ clientId: $("#sCid", body).value.trim(), authority: $("#sAuth", body).value }); toast("Guardado"); };
     $("#sOut", body).onclick = () => {
       if (S.mode === "demo") { saveSettings({ mode: null }); }
