@@ -863,7 +863,7 @@
         <p class="xsmall muted">Dirección de redirección: <code>${esc(Auth.redirectUri())}</code></p>
         <button class="btn secondary" id="sSaveC" type="button">Guardar</button></details>
       <button class="btn danger" id="sOut" type="button">${S.mode === "demo" ? "Salir del modo demo" : "Cerrar sesión"}</button>
-      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.2</p>`;
+      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.3</p>`;
     $("#sTheme", body).value = st.theme || "auto";
     $("#sTheme", body).onchange = e => { saveSettings({ theme: e.target.value }); applyTheme(); render(); };
     $("#sAuth", body).value = Auth.cfg().authority;

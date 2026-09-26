@@ -2,8 +2,15 @@
 (function () {
   const NS = "http://www.w3.org/2000/svg";
   const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"].map(v => `var(${v})`);
-  const eur = v => new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: Math.abs(v) >= 1000 ? 0 : 2 }).format(v || 0);
-  const eurShort = v => Math.abs(v) >= 1000 ? (v / 1000).toLocaleString("es-ES", { maximumFractionDigits: 1 }) + "k" : Math.round(v).toLocaleString("es-ES");
+  // Formato español con separador de miles siempre (1.707 €, 12.345,67 €)
+  function fmtNum(v, dec) {
+    v = +v || 0;
+    const neg = v < 0 && Math.abs(v).toFixed(dec) !== (0).toFixed(dec);
+    const [i, d] = Math.abs(v).toFixed(dec).split(".");
+    return (neg ? "-" : "") + i.replace(/\B(?=(\d{3})+(?!\d))/g, ".") + (d ? "," + d : "");
+  }
+  const eur = v => fmtNum(v, Math.abs(v || 0) >= 1000 ? 0 : 2) + "\u00a0€";
+  const eurShort = v => Math.abs(v) >= 1000 ? fmtNum(v / 1000, Math.abs(v) >= 10000 || Math.round(v / 100) % 10 === 0 ? 0 : 1) + "k" : fmtNum(Math.round(v), 0);
 
   function el(tag, attrs, parent) {
     const e = document.createElementNS(NS, tag);
@@ -197,5 +204,5 @@
     if (series.length > 1 && opts.legend !== false) legend(container, series);
   }
 
-  window.Charts = { donut, stackedBars, bullet, line, SERIES, eur, eurShort, hideTip };
+  window.Charts = { fmtNum, donut, stackedBars, bullet, line, SERIES, eur, eurShort, hideTip };
 })();

@@ -225,12 +225,17 @@
   function parseBudget(raw) {
     const V = raw.values, F = raw.formulas || raw.values, R0 = 6, C0 = 2; // B6
     const months = [];
-    (V[0] || []).forEach((v, j) => {
-      if (j > 0 && typeof v === "number" && v > 30000) {
-        const iso = serialToISO(v);
-        months.push({ key: iso.slice(0, 7), col: colLetter(C0 + j), j });
+    // Meses = cabeceras con fecha del bloque principal (se para en la primera columna vacía,
+    // para no confundir otras tablas de la hoja, como «Foto», con meses)
+    const head = V[0] || [];
+    for (let j = 1; j < head.length; j++) {
+      const v = head[j];
+      if (v === "" || v == null) { if (months.length) break; else continue; }
+      if (typeof v === "number" && v > 30000) {
+        const key = serialToISO(v).slice(0, 7);
+        if (!months.some(m => m.key === key)) months.push({ key, col: colLetter(C0 + j), j });
       }
-    });
+    }
     let gi = V.findIndex(r => String(r[0]).trim().toUpperCase() === "GASTOS");
     if (gi < 0) gi = 13;
     const items = []; let savings = null, rate = null;
