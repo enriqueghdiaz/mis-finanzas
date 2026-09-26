@@ -1,6 +1,6 @@
 // Service worker: guarda la app para que abra al instante y sin conexión.
 // Los datos del Excel NO pasan por aquí (van directos a Microsoft Graph).
-const CACHE = "mis-finanzas-v3";
+const CACHE = "mis-finanzas-v4";
 const SHELL = ["./", "index.html", "style.css", "config.js", "manifest.webmanifest",
   "js/auth.js", "js/excel.js", "js/demo.js", "js/charts.js", "js/app.js",
   "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png"];
