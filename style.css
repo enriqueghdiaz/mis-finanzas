@@ -382,3 +382,10 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 5px; font-
 .counter .pend { text-align: right; }
 .counter .pend-num { font-size: 20px; font-weight: 700; color: var(--text); }
 body.sheet-open .toast { bottom: auto; top: calc(14px + env(safe-area-inset-top, 0px)); }
+
+/* ── v1.7: partida de ahorro y retiradas ── */
+.prog.sav > div { background: var(--s1); }
+.withdraw { margin-top: 18px; padding: 14px; border-radius: 14px; border: 1px dashed var(--border); background: var(--surface-2); }
+.withdraw h4 { margin: 0 0 4px; font-size: 15px; }
+.w-grid { display: grid; grid-template-columns: 110px 1fr; gap: 8px; }
+.w-grid input { padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); min-width: 0; }

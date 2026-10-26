@@ -527,7 +527,14 @@
         const m = model.budget.months.find(m => colNumber(m.col) === a.c1);
         if (!m) return;
         const it = model.budget.items.find(i => i.row === a.r1);
-        const val = typeof c.value === "string" ? (Expr.tryEval(c.value.replace(/^=/, "")).value || 0) : c.value;
+        let val = c.value;
+        if (typeof c.value === "string") {
+          const r = Expr.tryEval(c.value.replace(/^=/, ""));
+          if (r.ok) val = r.value;
+          else if (model.budget.rate && c.value.replace(/\$/g, "").includes(model.budget.rate.addr)) // =ingresos × tasa
+            val = Math.round(model.budget.items.filter(i => i.tipo === "Ingreso").reduce((x, i) => x + (i.vals[m.key] || 0), 0) * model.budget.rate.value * 100) / 100;
+          else val = (it ? it.vals[m.key] : model.budget.savings && model.budget.savings.vals[m.key]) || 0;
+        }
         if (it) { it.vals[m.key] = val; it.f[m.key] = c.value; }
         if (model.budget.savings && model.budget.savings.row === a.r1) { model.budget.savings.vals[m.key] = val; model.budget.savings.f[m.key] = c.value; }
       });

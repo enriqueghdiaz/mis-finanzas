@@ -89,3 +89,13 @@ Los importes reales del mes se calculan igual que tu hoja P&G: suma por categor�
 - **Contador en Presupuesto:** arriba del todo ves **«Por asignar»** (ingresos − ahorro − gastos presupuestados) y, a su lado, **«Pendiente de gastar»**: lo que te queda de cada partida sumado (lo que te pasas en una no resta de las demás; se muestra aparte como exceso). «Ver detalle» despliega el cálculo. El contador se desplaza con la página y no aparece en la barra de abajo.
 - **El ahorro de los ingresos extra no se separa solo.** Al registrar un ingreso que supera lo previsto, la app te pregunta: apartar tu porcentaje, otra cantidad o nada. Si apartas algo, se crea un movimiento de Ahorro con la nota «Ahorro extra», y el contador lo descuenta. Puedes desactivar la pregunta en ⚙️ Ajustes.
 - **Actualizaciones:** a partir de ahora cada paquete trae todos los archivos de la app (menos `config.js`, para no borrar tu Client ID). Súbelos todos. Si falta alguno, la app te avisa con «Actualización incompleta».
+
+## Novedades v1.7: la partida de Ahorro
+
+- En **Presupuesto** aparece arriba la fila **Ahorro previsto** (apartado / previsto). Al tocarla puedes:
+  - **Cambiar el importe** de ese mes, con sumas, restas, conceptos y nota, como cualquier partida.
+  - **Volver a tu tasa** («Tu tasa: 25% de ingresos»): se guarda la fórmula original del Excel y se recalcula sola.
+  - **Retirar del ahorro para gastar:** indica cuánto y el motivo. Se resta del ahorro previsto (p. ej. `=507.5-50`), así sube «Por asignar», y opcionalmente se registra la retirada como movimiento de Ahorro en negativo.
+- Si ese mes ya has traspasado el ahorro, bajar el previsto no libera dinero: para eso está «Retirar del ahorro».
+- En **Editar mes completo** también puedes cambiar el ahorro previsto, y el contador se mueve mientras escribes.
+- En **Nuevo movimiento → Ahorro** puedes elegir **Aportar** o **Retirar**. Las retiradas se ven como «← importe».

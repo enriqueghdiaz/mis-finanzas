@@ -25,7 +25,9 @@
         const v = arr[r - a.r1][c - a.c1];
         if (typeof v === "string" && v[0] === "=") {
           const old = g[colLetter(c) + r], calc = window.Excel.Expr.tryEval(v.slice(1));
-          g[colLetter(c) + r] = { f: v, v: calc.ok ? calc.value : (old && typeof old === "object" ? old.v : 0) };
+          let val = calc.ok ? calc.value : (old && typeof old === "object" ? old.v : (typeof old === "number" ? old : 0));
+          if (!calc.ok && /\*\$B\$17/.test(v)) { const L = colLetter(c), n = x => { const q = g[L + x]; return typeof q === "number" ? q : 0; }; val = (n(9) + n(10) + n(13) + n(14)) * (g.B17 || 0); }
+          g[colLetter(c) + r] = { f: v, v: val };
         }
         else g[colLetter(c) + r] = v;
       }
