@@ -36,6 +36,7 @@
     async addTableRow(n, index, row) { this.wb.tx.splice(index, 0, row); }
     async updateTableRow(n, index, row) { this.wb.tx[index] = row; }
     async deleteTableRow(n, index) { this.wb.tx.splice(index, 1); }
+    async addTableColumn(n, values) { this.wb.txHead.push(values[0][0]); this.wb.tx.forEach((r, i) => r.push(values[i + 1] ? values[i + 1][0] : "")); }
     async info() { return { name: "Demo (datos ficticios)", webUrl: null, lastModifiedDateTime: new Date().toISOString() }; }
   }
 
@@ -74,6 +75,18 @@
     P.F26 = { f: "=20+15", v: 35 }; P.G26 = { f: "=20+15", v: 35 }; P.H26 = { f: "=20+15", v: 35 };
     P.F43 = { f: "=60+45-5", v: 100 };
     ["F", "G", "H"].forEach(c => P[c + "16"] = { f: `=+${c}15*$B$17`, v: 507.5 });
+    // Fotos de ejemplo: presupuesto inicial y reajustes de agosto y septiembre
+    const F = sheets.App_Fotos = { A1: "Foto", B1: "Mes", C1: "Etiqueta", D1: "Tipo", E1: "Categoría", F1: "Importe", G1: "Cuentas", H1: "Creada" };
+    let fr = 2;
+    const snap = (id, mes, label, changes) => {
+      const base = Object.assign({}, ...Object.values(budgetExp).map(([c, v]) => ({ [c]: v })), changes);
+      Object.entries(base).forEach(([c, v]) => { F["A" + fr] = id; F["B" + fr] = mes; F["C" + fr] = label; F["D" + fr] = "Gasto"; F["E" + fr] = c; F["F" + fr] = v; F["H" + fr] = id; fr++; });
+    };
+    snap("2026-08-01 09:10", "2026-08", "Inicial", { Restaurantes: 140, Alimentación: 240, Viajes: 60 });
+    snap("2026-08-14 21:30", "2026-08", "Reajuste", { Restaurantes: 165, Alimentación: 220, Viajes: 100 });
+    snap("2026-09-01 08:45", "2026-09", "Inicial", { Restaurantes: 150, Ropa: 60 });
+    snap("2026-09-17 22:05", "2026-09", "Reajuste", { Restaurantes: 175, Ropa: 40 });
+    snap("2026-10-01 09:00", "2026-10", "Inicial", { Restaurantes: 160 });
     sheets.App_Notas = { A1: "Clave", B1: "Mes", C1: "Categoría", D1: "Nota", E1: "Desglose", F1: "Actualizado",
       A2: "2026-10|Seguros obligatorios", B2: "2026-10", C2: "Seguros obligatorios", D2: "Revisar renovación en noviembre",
       E2: JSON.stringify([{ e: "20", l: "Seguro hogar" }, { e: "15", l: "Seguro coche (cuota)" }]), F2: "2026-10-01 10:00" };

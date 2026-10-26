@@ -389,3 +389,30 @@ body.sheet-open .toast { bottom: auto; top: calc(14px + env(safe-area-inset-top,
 .withdraw h4 { margin: 0 0 4px; font-size: 15px; }
 .w-grid { display: grid; grid-template-columns: 110px 1fr; gap: 8px; }
 .w-grid input { padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); min-width: 0; }
+
+/* ── v1.8: cuentas ── */
+.acc-tag { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 0 6px; border-radius: 99px; background: var(--warn-soft); color: var(--warn); }
+.acc-free { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+.acc-free.neg { color: var(--neg); }
+.acc-free small, .acc-line small { color: var(--text-3); font-size: 11px; }
+.counter-lines .acc-line { border-top: 1px dashed var(--border); padding-top: 4px; margin-top: 2px; }
+.acc-box { border: 1px solid var(--border); background: var(--warn-soft); border-radius: 12px; padding: 10px; margin: -4px 0 14px; }
+.acc-box label { font-size: 13px; display: block; margin-bottom: 6px; }
+.acc-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.acc-row input { width: 120px; padding: 9px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); font-size: 16px; font-weight: 600; }
+.acc-rest { margin-top: 6px; }
+.filters select:last-child { grid-column: auto; }
+
+/* ── v1.8: fotos del presupuesto ── */
+.dchips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.dchip { font-size: 11.5px; padding: 3px 8px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; }
+.dchip.up { color: var(--neg); }
+.dchip.down { color: var(--s1); }
+.timeline { margin-top: 12px; }
+.tl-item { display: grid; grid-template-columns: 18px 1fr; gap: 8px; position: relative; padding-bottom: 14px; }
+.tl-item::before { content: ""; position: absolute; left: 6px; top: 14px; bottom: 0; width: 2px; background: var(--border); }
+.tl-item:last-child::before { display: none; }
+.tl-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--brand); margin-top: 3px; }
+.tl-item.now .tl-dot { background: var(--surface); border: 2px dashed var(--brand); }
+.tl-head { display: flex; justify-content: space-between; gap: 8px; }
+.tl-body .link { margin-top: 6px; }

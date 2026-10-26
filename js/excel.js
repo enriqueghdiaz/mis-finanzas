@@ -117,6 +117,22 @@
   const INCOME_CATS = CATS.filter(g => g.tipo === "Ingreso").flatMap(g => g.cats);
   const EXPENSE_CATS = CATS.filter(g => g.tipo === "Gasto").flatMap(g => g.cats);
 
+  // ── Cuentas (configurables en config.js con ACCOUNTS) ──
+  function accounts() {
+    const c = window.APP_CONFIG.ACCOUNTS;
+    return Array.isArray(c) && c.length ? c : [
+      { name: "Openbank", principal: true },
+      { name: "Edenred", gastoCats: ["Restaurantes"], ingresoCats: ["Dietas"], nota: "ticket restaurante: solo Restaurantes" }
+    ];
+  }
+  const mainAccount = () => (accounts().find(a => a.principal) || accounts()[0]).name;
+  // Cuenta de un movimiento: la columna «Cuenta» o, en los antiguos, la que aparezca en la nota
+  function accountOf(t) {
+    if (t.cuenta) return t.cuenta;
+    const hit = accounts().find(a => !a.principal && new RegExp(a.name, "i").test(t.notas || ""));
+    return hit ? hit.name : mainAccount();
+  }
+
   const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
   // ── Proveedor Microsoft Graph ──────────────────────────────
@@ -168,6 +184,7 @@
       return { values: j.values, formulas: j.formulas };
     }
     async writeRange(sheet, addr, data) { await this.req("PATCH", `${this.ws(sheet)}/range(address='${addr}')`, data); }
+    async addTableColumn(name, values) { await this.req("POST", `${this.tbl(name)}/columns/add`, { values }); }
     async addSheet(name) { await this.req("POST", "/worksheets/add", { name }); }
     tbl(name) { return `/tables('${encodeURIComponent(name)}')`; }
     async readTable(name) { const j = await this.req("GET", `${this.tbl(name)}/range?$select=values`); return j.values; }
@@ -210,8 +227,10 @@
   }
 
   // ── Lectura de todo el libro ───────────────────────────────
-  const RANGES = { budget: "B6:AN50", balance: "B8:R31", invest: "B2:F21", notes: "A1:F600" };
-  const NOTES_HEAD = ["Clave", "Mes", "Categoría", "Nota", "Desglose", "Actualizado"];
+  const RANGES = { budget: "B6:AN50", balance: "B8:R31", invest: "B2:F21", notes: "A1:G600", snaps: "A1:H6000" };
+  const SNAP_HEAD = ["Foto", "Mes", "Etiqueta", "Tipo", "Categoría", "Importe", "Cuentas", "Creada"];
+  const snapsSheet = () => (window.APP_CONFIG.SHEETS.snaps = window.APP_CONFIG.SHEETS.snaps || "App_Fotos");
+  const NOTES_HEAD = ["Clave", "Mes", "Categoría", "Nota", "Desglose", "Actualizado", "Cuentas"];
   const notesSheet = () => (window.APP_CONFIG.SHEETS.notes = window.APP_CONFIG.SHEETS.notes || "App_Notas");
 
   // Comprueba paso a paso el archivo para dar un error claro si algo no cuadra
@@ -245,6 +264,7 @@
       S.txTable = tbl;
       notesSheet();
       const nh = sheets.find(n => n.toLowerCase() === S.notes.toLowerCase()); if (nh) S.notes = nh;
+      snapsSheet(); const sh = sheets.find(n => n.toLowerCase() === S.snaps.toLowerCase()); if (sh) S.snaps = sh;
       ["budget", "balance", "invest"].forEach(k => {
         const hit = sheets.find(n => n.trim().toLowerCase() === S[k].trim().toLowerCase());
         if (hit) S[k] = hit; else warnings.push(S[k]);
@@ -257,11 +277,13 @@
     const budget = await p.readRange(S.budget, RANGES.budget).catch(e => { throw new Error(`Leyendo la hoja «${S.budget}» (${RANGES.budget}): ${e.message}`); });
     const [balance, invest] = await Promise.all([opt("balance", RANGES.balance), opt("invest", RANGES.invest)]);
     const notes = (sheets && !sheets.includes(S.notes)) ? null : await p.readRange(S.notes, RANGES.notes).catch(() => null);
-    return { tx, budget, balance, invest, notes, warnings, loadedAt: new Date().toISOString() };
+    snapsSheet();
+    const snaps = (sheets && !sheets.includes(S.snaps)) ? null : await p.readRange(S.snaps, RANGES.snaps).catch(() => null);
+    return { tx, budget, balance, invest, notes, snaps, warnings, loadedAt: new Date().toISOString() };
   }
 
   // ── Traducción a modelo ────────────────────────────────────
-  const TX_COLS = ["Transacción", "Naturaleza", "Periodicidad", "Categoría", "Fecha", "Importe", "Notas"];
+  const TX_COLS = ["Transacción", "Naturaleza", "Periodicidad", "Categoría", "Fecha", "Importe", "Notas", "Cuenta"];
 
   function parseTx(values) {
     const head = (values[0] || []).map(h => String(h).trim());
@@ -281,17 +303,18 @@
         cat,
         fecha: serialToISO(r[idx["Fecha"]]) || "",
         importe: num(r[idx["Importe"]]),
-        notas: String(r[idx["Notas"]] == null ? "" : r[idx["Notas"]]).trim()
+        notas: String(r[idx["Notas"]] == null ? "" : r[idx["Notas"]]).trim(),
+        cuenta: idx["Cuenta"] >= 0 ? String(r[idx["Cuenta"]] == null ? "" : r[idx["Cuenta"]]).trim() : ""
       });
     }
-    return { head, idx, list };
+    return { head, idx, list, accCol: idx["Cuenta"] >= 0 };
   }
 
   function txToRow(head, t) {
     const map = {
       "Transacción": t.tipo === "Ahorro" ? SAVING.tipo : t.tipo,
       "Naturaleza": t.nat, "Periodicidad": t.per, "Categoría": t.cat,
-      "Fecha": isoToSerial(t.fecha), "Importe": +t.importe, "Notas": t.notas || ""
+      "Fecha": isoToSerial(t.fecha), "Importe": +t.importe, "Notas": t.notas || "", "Cuenta": t.cuenta || ""
     };
     return head.map(h => (h in map ? map[h] : ""));
   }
@@ -420,11 +443,29 @@
       if (i === 0 || !r[0]) return;
       let des = [];
       try { des = r[4] ? JSON.parse(r[4]) : []; } catch (e) { des = []; }
-      out[String(r[0])] = { mes: String(r[1] || ""), cat: String(r[2] || ""), nota: String(r[3] || ""), desglose: Array.isArray(des) ? des : [], row: i + 1 };
+      let cu = {};
+      try { cu = r[6] ? JSON.parse(r[6]) : {}; } catch (e) { cu = {}; }
+      out[String(r[0])] = { mes: String(r[1] || ""), cat: String(r[2] || ""), nota: String(r[3] || ""), desglose: Array.isArray(des) ? des : [], cuentas: cu && typeof cu === "object" ? cu : {}, row: i + 1 };
     });
     return out;
   }
   const noteKey = (mes, cat) => `${mes}|${cat}`;
+
+  // Fotos del presupuesto: una fila por partida, agrupadas por la columna «Foto»
+  function parseSnaps(raw) {
+    const out = [], byId = {};
+    if (!raw || !raw.values) return out;
+    raw.values.forEach((r, i) => {
+      if (i === 0 || !r[0] || !r[4]) return;
+      const id = String(r[0]);
+      let s = byId[id];
+      if (!s) { s = byId[id] = { id, mes: String(r[1] || ""), label: String(r[2] || ""), creada: String(r[7] || id), items: {} }; out.push(s); }
+      let cu = {};
+      try { cu = r[6] ? JSON.parse(r[6]) : {}; } catch (e) { cu = {}; }
+      s.items[String(r[4])] = { tipo: String(r[3] || ""), v: typeof r[5] === "number" ? r[5] : (parseFloat(r[5]) || 0), cuentas: cu || {} };
+    });
+    return out.sort((a, b) => a.id.localeCompare(b.id));
+  }
 
   function build(raw) {
     const tx = parseTx(raw.tx);
@@ -435,6 +476,7 @@
       balance: raw.balance ? parseBalance(raw.balance, year) : { months: [], sections: [] },
       warnings: raw.warnings || [],
       notes: parseNotes(raw.notes),
+      snaps: parseSnaps(raw.snaps),
       invest: parseInvest(raw.invest),
       loadedAt: raw.loadedAt
     };
@@ -449,11 +491,26 @@
     return hit.idx;
   }
 
+  async function ensureAccountCol(p, model, t) {
+    if (!t || !t.cuenta || model.tx.accCol) return;
+    const T = window.APP_CONFIG.SHEETS.txTable;
+    const vals = await p.readTable(T);
+    const head = (vals[0] || []).map(h => String(h).trim());
+    if (!head.includes("Cuenta")) {
+      if (!p.addTableColumn) return;
+      await p.addTableColumn(T, [["Cuenta"]].concat(vals.slice(1).map(() => [""])));
+      head.push("Cuenta");
+    }
+    model.tx.head = head; model.tx.accCol = true;
+  }
+
   const ops = {
     async addTx(p, model, d) {
+      await ensureAccountCol(p, model, d.tx);
       await p.addTableRow(window.APP_CONFIG.SHEETS.txTable, 0, txToRow(model.tx.head, d.tx));
     },
     async updateTx(p, model, d) {
+      await ensureAccountCol(p, model, d.tx);
       const i = await findTxIndex(p, model.tx.head, d.old);
       await p.updateTableRow(window.APP_CONFIG.SHEETS.txTable, i, txToRow(model.tx.head, d.tx));
     },
@@ -493,7 +550,7 @@
         cur = { values: [] };
       }
       const vals = cur.values || [];
-      if (!vals.length || String(vals[0][0] || "") !== "Clave") await p.writeRange(S, "A1:F1", { values: [NOTES_HEAD] });
+      if (!vals.length || String(vals[0][0] || "") !== "Clave" || String(vals[0][6] || "") !== "Cuentas") await p.writeRange(S, "A1:G1", { values: [NOTES_HEAD] });
       const keys = vals.map(r => String(r[0] || ""));
       let nextFree = Math.max(2, keys.reduce((last, k, i) => k ? i + 1 : last, 1) + 1);
       for (const n of d.notes) {
@@ -501,7 +558,35 @@
         let row = keys.indexOf(key) + 1;
         if (row < 2) { row = nextFree++; keys[row - 1] = key; }
         const des = (n.desglose || []).filter(x => x && (x.e || x.l));
-        await p.writeRange(S, `A${row}:F${row}`, { values: [[key, n.mes, n.cat, n.nota || "", des.length ? JSON.stringify(des) : "", new Date().toISOString().slice(0, 16).replace("T", " ")]] });
+        // Si no se indica el reparto por cuentas, se conserva el que hubiera
+        const prevCu = vals[row - 1] ? String(vals[row - 1][6] || "") : "";
+        const cu = n.cuentas === undefined ? prevCu : (n.cuentas && Object.keys(n.cuentas).length ? JSON.stringify(n.cuentas) : "");
+        await p.writeRange(S, `A${row}:G${row}`, { values: [[key, n.mes, n.cat, n.nota || "", des.length ? JSON.stringify(des) : "", new Date().toISOString().slice(0, 16).replace("T", " "), cu]] });
+      }
+    },
+    async addSnapshot(p, model, d) { // d: {id, mes, label, rows:[{tipo, cat, v, cuentas}]}
+      const S = snapsSheet();
+      let cur;
+      try { cur = await p.readRange(S, RANGES.snaps); }
+      catch (e) { if (!p.addSheet) throw e; await p.addSheet(S); cur = { values: [] }; }
+      const vals = cur.values || [];
+      if (!vals.length || String(vals[0][0] || "") !== "Foto") await p.writeRange(S, "A1:H1", { values: [SNAP_HEAD] });
+      const last = vals.reduce((l, r, i) => (r[0] ? i + 1 : l), 1);
+      const r1 = Math.max(2, last + 1), r2 = r1 + d.rows.length - 1;
+      const creada = String(d.id).split(" ").slice(0, 2).join(" ");
+      await p.writeRange(S, `A${r1}:H${r2}`, { values: d.rows.map(x => [d.id, d.mes, d.label || "", x.tipo, x.cat, x.v, x.cuentas && Object.keys(x.cuentas).length ? JSON.stringify(x.cuentas) : "", creada]) });
+    },
+    async deleteSnapshot(p, model, d) {
+      const S = snapsSheet();
+      const cur = await p.readRange(S, RANGES.snaps);
+      const rows = []; (cur.values || []).forEach((r, i) => { if (String(r[0]) === d.id) rows.push(i + 1); });
+      if (!rows.length) return;
+      // borra por bloques consecutivos
+      let a = rows[0], prev = rows[0];
+      const flushBlock = async (x, y) => p.writeRange(S, `A${x}:H${y}`, { values: Array.from({ length: y - x + 1 }, () => ["", "", "", "", "", "", "", ""]) });
+      for (const r of rows.slice(1).concat([null])) {
+        if (r === prev + 1) { prev = r; continue; }
+        await flushBlock(a, prev); if (r != null) { a = r; prev = r; }
       }
     },
     async setInvestAmount(p, model, d) {
@@ -549,13 +634,24 @@
       });
     } else if (op.type === "setNotes") {
       model.notes = model.notes || {};
-      d.notes.forEach(n => { model.notes[noteKey(n.mes, n.cat)] = { mes: n.mes, cat: n.cat, nota: n.nota || "", desglose: (n.desglose || []).filter(x => x && (x.e || x.l)) }; });
+      d.notes.forEach(n => {
+        const old = model.notes[noteKey(n.mes, n.cat)];
+        model.notes[noteKey(n.mes, n.cat)] = { mes: n.mes, cat: n.cat, nota: n.nota || "", desglose: (n.desglose || []).filter(x => x && (x.e || x.l)), cuentas: n.cuentas === undefined ? (old ? old.cuentas || {} : {}) : (n.cuentas || {}) };
+      });
+    } else if (op.type === "addSnapshot") {
+      model.snaps = (model.snaps || []).filter(x => x.id !== d.id);
+      const items = {}; d.rows.forEach(x => items[x.cat] = { tipo: x.tipo, v: x.v, cuentas: x.cuentas || {} });
+      model.snaps.push({ id: d.id, mes: d.mes, label: d.label || "", creada: d.id, items, pending: true });
+      model.snaps.sort((a, b) => a.id.localeCompare(b.id));
+    } else if (op.type === "deleteSnapshot") {
+      model.snaps = (model.snaps || []).filter(x => x.id !== d.id);
     } else if (op.type === "setInvestAmount" && model.invest) {
       model.invest.amount = d.value;
     }
   }
 
   window.Excel = {
+    accounts, mainAccount, accountOf,
     GraphProvider, loadRaw, build, ops, applyLocal, investSplit, txToRow, Expr, noteKey,
     CATS, CAT_INFO, SAVING, INCOME_CATS, EXPENSE_CATS, MESES,
     serialToISO, isoToSerial, colLetter, colNumber, parseAddr, sameTx

@@ -144,13 +144,17 @@
     const rowH = 30, H = rows.length * rowH + 8;
     const { s, w } = svg(container, H);
     const lw = Math.min(118, w * 0.36), rw = 64, iw = w - lw - rw - 8;
-    const maxV = Math.max(1, ...rows.map(r => Math.max(r.real, r.budget || 0)));
+    const maxV = Math.max(1, ...rows.map(r => Math.max(r.real, r.budget || 0, r.budget0 || 0)));
     rows.forEach((r, i) => {
       const y = 4 + i * rowH;
       const t = el("text", { x: 0, y: y + 17 }, s); t.textContent = r.label.length > 17 ? r.label.slice(0, 16) + "…" : r.label;
       el("rect", { x: lw, y: y + 7, width: iw, height: 12, rx: 4, fill: "var(--surface-2)" }, s);
       const over = r.budget != null && r.real > r.budget + 0.005;
       el("path", { d: roundedRightRect(lw, y + 7, iw * r.real / maxV, 12, 4), fill: over ? "var(--neg)" : (opts.color || "var(--s1)") }, s);
+      if (r.budget0 != null && Math.abs(r.budget0 - (r.budget || 0)) > 0.5) {
+        const b0 = lw + iw * Math.min(r.budget0, maxV) / maxV;
+        el("line", { x1: b0, x2: b0, y1: y + 3, y2: y + 23, stroke: "var(--text-3)", "stroke-width": 2, "stroke-dasharray": "3 2" }, s);
+      }
       if (r.budget) {
         const bx = lw + iw * r.budget / maxV;
         el("line", { x1: bx, x2: bx, y1: y + 3, y2: y + 23, stroke: "var(--text)", "stroke-width": 2 }, s);
@@ -159,7 +163,7 @@
       const hit = el("rect", { x: 0, y, width: w, height: rowH, fill: "transparent" }, s);
       if (r.onClick) hit.addEventListener("click", r.onClick);
       hit.style.cursor = "pointer";
-      hit.addEventListener("pointerdown", e => showTip(`<b>${r.label}</b>Real: ${eur(r.real)}${r.budget != null ? `<br>Presupuesto: ${eur(r.budget)}<br>${over ? "Exceso: " + eur(r.real - r.budget) : "Disponible: " + eur(r.budget - r.real)}` : ""}`, e.clientX, e.clientY));
+      hit.addEventListener("pointerdown", e => showTip(`<b>${r.label}</b>Real: ${eur(r.real)}${r.budget0 != null && Math.abs(r.budget0 - (r.budget || 0)) > 0.5 ? `<br>Presupuesto inicial: ${eur(r.budget0)}` : ""}${r.budget != null ? `<br>Presupuesto: ${eur(r.budget)}<br>${over ? "Exceso: " + eur(r.real - r.budget) : "Disponible: " + eur(r.budget - r.real)}` : ""}`, e.clientX, e.clientY));
     });
   }
 

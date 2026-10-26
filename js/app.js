@@ -101,6 +101,14 @@
   // ── Cola de cambios (funciona sin conexión) ───────────────
   function saveQueue() { if (S.mode === "graph") LS.set("fin_queue", S.queue); }
   async function doOps(list, okMsg) {
+    if (settings().autoSnap !== false && S.model) {
+      const pre = [];
+      list.forEach(op => {
+        if (op.type !== "setBudgetCells") return;
+        monthsOfCells(op.data.cells).forEach(k => { if (!snapsOf(k).length && !pre.some(x => x.data.mes === k)) pre.push(snapOp(k, "Inicial (automática)")); });
+      });
+      list = pre.concat(list);
+    }
     list.forEach(op => { op.t = Date.now(); Excel.applyLocal(S.model, op); S.queue.push(op); });
     saveQueue();
     render();
@@ -155,6 +163,15 @@
   function txMonths() { return Array.from(new Set(S.model.tx.list.map(t => t.fecha.slice(0, 7)).filter(Boolean))).sort(); }
   function clampMonth(list) { if (!list.includes(S.month)) { const past = list.filter(k => k <= todayISO().slice(0, 7)); S.month = past.length ? past[past.length - 1] : list[0]; } }
   function cleanNote(n) { return (n || "").replace(/^\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s*-?\s*/, "").replace(/\s+-\s+(Edenred|Bizum.*)$/i, "").trim() || "(sin nota)"; }
+
+  // ── Cuentas ──
+  const restrictedAccounts = () => Excel.accounts().filter(a => !a.principal);
+  function allowedAccounts(tipo, cat) {
+    return Excel.accounts().filter(a => a.principal || (tipo === "Gasto" && (a.gastoCats || []).includes(cat)) || (tipo === "Ingreso" && (a.ingresoCats || []).includes(cat)));
+  }
+  const accCats = a => (a.gastoCats || []).concat(a.ingresoCats || []);
+  function accPart(k, cat, acc) { const n = (S.model.notes || {})[Excel.noteKey(k, cat)]; return n && n.cuentas && +n.cuentas[acc] || 0; }
+  function realAcc(k, cat, acc) { return txOfMonth(k).filter(t => t.cat === cat && Excel.accountOf(t) === acc).reduce((a, t) => a + t.importe, 0); }
 
   const CAT_ICON = {
     "Nómina": "💼", "Dietas": "🎫", "Otros ingresos": "➕", "Financiación": "🏦", "Ahorro": "🐷",
@@ -293,19 +310,19 @@
     const sign = t.tipo === "Ingreso" ? "+" : t.tipo === "Ahorro" ? (out ? "← " : "→ ") : "−";
     const cls = t.tipo === "Ingreso" || out ? "pos" : "";
     const d = t.fecha ? new Date(t.fecha + "T12:00").toLocaleDateString("es-ES", { day: "numeric", month: "short" }) : "";
-    b.innerHTML = `<span class="ico">${icon(t.cat)}</span><span class="mid"><div class="t">${esc(t.notas || t.cat)}</div><div class="s">${esc(t.cat)} · ${d}${t.nat && t.nat !== "NA" && t.tipo === "Gasto" ? " · " + esc(t.nat) : ""}</div></span><span class="amt num ${cls}">${sign}${eur(Math.abs(t.importe))}</span>`;
+    b.innerHTML = `<span class="ico">${icon(t.cat)}</span><span class="mid"><div class="t">${esc(t.notas || t.cat)}</div><div class="s">${esc(t.cat)} · ${d}${Excel.accountOf(t) !== Excel.mainAccount() ? ` · <span class="acc-tag">${esc(Excel.accountOf(t))}</span>` : (t.nat && t.nat !== "NA" && t.tipo === "Gasto" ? " · " + esc(t.nat) : "")}</div></span><span class="amt num ${cls}">${sign}${eur(Math.abs(t.importe))}</span>`;
     b.onclick = () => openTxForm(t);
     return b;
   }
 
   // ── MOVIMIENTOS ───────────────────────────────────────────
   function goMovs(filter) {
-    Object.assign(S.movFilter, { q: "", tipo: "Todos", cat: "", month: "", limit: 60 }, filter || {});
+    Object.assign(S.movFilter, { q: "", tipo: "Todos", cat: "", month: "", acc: "", limit: 60 }, filter || {});
     go("movimientos");
   }
   function renderMovs(v) {
     const F = S.movFilter;
-    F.cat = F.cat || ""; F.month = F.month || ""; F.sort = F.sort || "fecha";
+    F.cat = F.cat || ""; F.month = F.month || ""; F.sort = F.sort || "fecha"; F.acc = F.acc || "";
     const months = txMonths().slice().reverse();
     const catOpts = Excel.CATS.map(g => `<optgroup label="${g.tipo === "Gasto" ? esc(g.nat + " · " + g.per) : "Ingresos " + g.per.toLowerCase() + "s"}">${g.cats.map(c => `<option value="${esc(c)}" ${F.cat === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</optgroup>`).join("")
       + `<optgroup label="Ahorro"><option value="Ahorro" ${F.cat === "Ahorro" ? "selected" : ""}>Ahorro</option></optgroup>`;
@@ -314,6 +331,7 @@
       <div class="filters">
         <select id="fCat" aria-label="Categoría"><option value="">Todas las categorías</option>${catOpts}</select>
         <select id="fMes" aria-label="Mes"><option value="">Todos los meses</option>${months.map(m => `<option value="${m}" ${F.month === m ? "selected" : ""}>${monthLabel(m)}</option>`).join("")}</select>
+        <select id="fAcc" aria-label="Cuenta"><option value="">Todas las cuentas</option>${Excel.accounts().map(a => `<option value="${esc(a.name)}" ${F.acc === a.name ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select>
         <select id="fSort" aria-label="Ordenar"><option value="fecha" ${F.sort === "fecha" ? "selected" : ""}>Más recientes</option><option value="importe" ${F.sort === "importe" ? "selected" : ""}>Mayor importe</option><option value="concepto" ${F.sort === "concepto" ? "selected" : ""}>Concepto A-Z</option></select>
       </div>
       <div id="movSum" class="mov-sum"></div>
@@ -324,6 +342,7 @@
     $("#fCat", v).onchange = e => { F.cat = e.target.value; F.limit = 60; drawList(); };
     $("#fMes", v).onchange = e => { F.month = e.target.value; F.limit = 60; drawList(); };
     $("#fSort", v).onchange = e => { F.sort = e.target.value; F.limit = 60; drawList(); };
+    $("#fAcc", v).onchange = e => { F.acc = e.target.value; F.limit = 60; drawList(); };
     function matches(t, q) {
       if (!q) return true;
       const hay = (t.notas + " " + t.cat).toLowerCase();
@@ -333,17 +352,17 @@
     }
     function drawList() {
       const q = F.q.trim().toLowerCase();
-      let l = S.model.tx.list.filter(t => (F.tipo === "Todos" || t.tipo === F.tipo) && (!F.cat || t.cat === F.cat) && (!F.month || t.fecha.startsWith(F.month)) && matches(t, q));
+      let l = S.model.tx.list.filter(t => (F.tipo === "Todos" || t.tipo === F.tipo) && (!F.cat || t.cat === F.cat) && (!F.month || t.fecha.startsWith(F.month)) && (!F.acc || Excel.accountOf(t) === F.acc) && matches(t, q));
       if (F.sort === "importe") l = l.slice().sort((a, b) => b.importe - a.importe);
       else if (F.sort === "concepto") l = l.slice().sort((a, b) => cleanNote(a.notas).localeCompare(cleanNote(b.notas), "es"));
       else l = l.slice().sort((a, b) => b.fecha.localeCompare(a.fecha));
       const g = l.filter(x => x.tipo === "Gasto").reduce((a, x) => a + x.importe, 0);
       const i = l.filter(x => x.tipo === "Ingreso").reduce((a, x) => a + x.importe, 0);
       const ah = l.filter(x => x.tipo === "Ahorro").reduce((a, x) => a + x.importe, 0);
-      const active = q || F.tipo !== "Todos" || F.cat || F.month;
+      const active = q || F.tipo !== "Todos" || F.cat || F.month || F.acc;
       $("#movSum", v).innerHTML = `<span><b>${l.length}</b> movimiento${l.length === 1 ? "" : "s"}${g ? ` · gastos <b class="num">${eur(g)}</b>` : ""}${i ? ` · ingresos <b class="num pos">${eur(i)}</b>` : ""}${ah ? ` · ahorro <b class="num">${eur(ah)}</b>` : ""}</span>
         ${active ? `<button type="button" class="link" id="fClear">Quitar filtros</button>` : ""}`;
-      if ($("#fClear", v)) $("#fClear", v).onclick = () => { Object.assign(F, { q: "", tipo: "Todos", cat: "", month: "", limit: 60 }); renderMovs(v); };
+      if ($("#fClear", v)) $("#fClear", v).onclick = () => { Object.assign(F, { q: "", tipo: "Todos", cat: "", month: "", acc: "", limit: 60 }); renderMovs(v); };
       const box = $("#movList", v); box.innerHTML = "";
       if (!l.length) { box.innerHTML = `<div class="empty">No hay movimientos con ese filtro.</div>`; return; }
       let cur = null;
@@ -374,6 +393,7 @@
     const editing = !!t;
     const f = t ? Object.assign({}, t) : { tipo: "Gasto", cat: "", importe: "", fecha: todayISO(), notas: "" };
     f.retiro = f.tipo === "Ahorro" && +f.importe < 0;
+    f.cuenta = t ? Excel.accountOf(t) : "";
     if (f.importe !== "") f.importe = Math.abs(+f.importe);
     const body = document.createElement("div");
     const draw = () => {
@@ -383,6 +403,13 @@
         <div class="field"><input id="fImp" class="amount-input num" type="text" inputmode="decimal" placeholder="0,00 €" value="${f.importe !== "" ? String(f.importe).replace(".", ",") : ""}" aria-label="Importe"></div>
         ${groups.length ? `<div class="field"><label>Categoría</label>${groups.map(g => `<div class="cat-sec">${g.tipo === "Gasto" ? g.nat + " · " + g.per : g.per}</div><div class="cat-grid">${g.cats.map(c => `<button type="button" class="chip ${f.cat === c ? "on" : ""}" data-c="${esc(c)}">${icon(c)} ${esc(c)}</button>`).join("")}</div>`).join("")}</div>` : `<div class="seg" style="margin-bottom:8px"><button type="button" data-r="0" class="${!f.retiro ? "on" : ""}">→ Aportar</button><button type="button" data-r="1" class="${f.retiro ? "on" : ""}">← Retirar</button></div>
           <p class="small muted" style="margin-top:0">${f.retiro ? "Se registra en negativo en la categoría Ahorro (el dinero vuelve a estar disponible). Para que sume a «Por asignar», baja también el ahorro previsto en Presupuesto → Ahorro → «Retirar del ahorro»." : "Se registra como <b>Gasto · Esencial · Fijo · Ahorro</b>, igual que en tu Excel."}</p>`}
+        ${(() => {
+          const opts = f.cat ? allowedAccounts(f.tipo, f.cat) : [];
+          if (opts.length < 2) return "";
+          const lastAcc = (settings().lastAcc || {})[f.cat];
+          if (!f.cuenta || !opts.some(a => a.name === f.cuenta)) f.cuenta = opts.some(a => a.name === lastAcc) ? lastAcc : Excel.mainAccount();
+          return `<div class="field"><label>Pagado con</label><div class="chips">${opts.map(a => `<button type="button" class="chip acc ${f.cuenta === a.name ? "on" : ""}" data-acc="${esc(a.name)}">${a.principal ? "🏦" : "🎫"} ${esc(a.name)}</button>`).join("")}</div></div>`;
+        })()}
         <div class="field"><label for="fFecha">Fecha (mes en el que cuenta)</label><input id="fFecha" type="date" value="${esc(f.fecha)}"></div>
         <div class="field"><label for="fNotas">Notas</label><input id="fNotas" type="text" list="noteSug" value="${esc(f.notas)}" placeholder="Ej.: Compra semanal"><datalist id="noteSug"></datalist></div>
         <button class="btn" id="fSave" type="button">${editing ? "Guardar cambios" : "Añadir"}</button>
@@ -390,6 +417,7 @@
       $$(".seg button[data-r]", body).forEach(b => b.onclick = () => { keep(); f.retiro = b.dataset.r === "1"; draw(); });
       $$(".seg button[data-t]", body).forEach(b => b.onclick = () => { keep(); f.tipo = b.dataset.t; if (f.tipo === "Ahorro") f.cat = "Ahorro"; else if (Excel.CAT_INFO[f.cat] && Excel.CAT_INFO[f.cat].tipo !== f.tipo) f.cat = ""; draw(); });
       $$(".cat-grid .chip", body).forEach(b => b.onclick = () => { keep(); f.cat = b.dataset.c; draw(); });
+      $$(".chip.acc", body).forEach(b => b.onclick = () => { keep(); f.cuenta = b.dataset.acc; draw(); });
       const sug = $("#noteSug", body);
       const notes = {}; S.model.tx.list.filter(x => !f.cat || x.cat === f.cat).forEach(x => { const n = x.notas; if (n) notes[n] = (notes[n] || 0) + 1; });
       Object.entries(notes).sort((a, b) => b[1] - a[1]).slice(0, 12).forEach(([n]) => { const o = document.createElement("option"); o.value = n; sug.appendChild(o); });
@@ -414,7 +442,10 @@
       if (!f.cat) return toast("Elige una categoría");
       if (!f.fecha) return toast("Elige una fecha");
       const info = f.tipo === "Ahorro" ? Excel.SAVING : Excel.CAT_INFO[f.cat];
-      const tx = { tipo: f.tipo, nat: info.nat, per: info.per, cat: f.cat, fecha: f.fecha, importe: round2(f.tipo === "Ahorro" && f.retiro ? -imp : imp), notas: (f.notas || "").trim() };
+      const accOk = allowedAccounts(f.tipo, f.cat).some(a => a.name === f.cuenta);
+      const cuenta = accOk ? f.cuenta : Excel.mainAccount();
+      if (allowedAccounts(f.tipo, f.cat).length > 1) saveSettings({ lastAcc: Object.assign({}, settings().lastAcc, { [f.cat]: cuenta }) });
+      const tx = { tipo: f.tipo, nat: info.nat, per: info.per, cat: f.cat, fecha: f.fecha, importe: round2(f.tipo === "Ahorro" && f.retiro ? -imp : imp), notas: (f.notas || "").trim(), cuenta };
       // ¿Este ingreso supera lo previsto para su categoría ese mes?
       let extraPart = 0;
       if (!editing && tx.tipo === "Ingreso" && settings().askSavings !== false) {
@@ -485,6 +516,7 @@
       overs: withB.filter(m => realCat(m, cat) > budgetOf(cat, m) * 1.05 + 5).length,
       nRefB: withB.length,
       dev: withB.length ? withB.reduce((a, m) => a + realCat(m, cat) - budgetOf(cat, m), 0) / withB.length : null,
+      devInit: withB.length ? withB.reduce((a, m) => a + realCat(m, cat) - initialBudget(cat, m), 0) / withB.length : null,
       six, sixVals: six.map(m => realCat(m, cat))
     };
   }
@@ -519,7 +551,18 @@
       const d = val(i) - realCat(k, i.cat);
       if (d > 0.004) { pend += d; nPend++; } else if (d < -0.004) exceso -= d;
     });
-    return { pend, exceso, nPend, ingPlan, ingCons, extra, rate, byRate, ahoPlan, ahoExtra, ahoReal, aho, gasPres, gasReal, libre: ingCons - aho - gasPres };
+    // Cuentas restringidas (Edenred): su dinero solo vale para sus categorías
+    let ingR = 0, gasR = 0, pendR = 0;
+    const accs = restrictedAccounts().map(a => {
+      const ingP = inc.reduce((x, i) => x + Math.min(accPart(k, i.cat, a.name), val(i)), 0);
+      const ingRe = txOfMonth(k).filter(t => t.tipo === "Ingreso" && Excel.accountOf(t) === a.name).reduce((x, t) => x + t.importe, 0);
+      const ingC = Math.max(ingP, ingRe);
+      const gasP = b.items.filter(i => i.tipo === "Gasto").reduce((x, i) => x + Math.min(accPart(k, i.cat, a.name), val(i)), 0);
+      const pendA = b.items.filter(i => i.tipo === "Gasto").reduce((x, i) => x + Math.max(0, Math.min(accPart(k, i.cat, a.name), val(i)) - realAcc(k, i.cat, a.name)), 0);
+      ingR += ingC; gasR += gasP; pendR += pendA;
+      return { name: a.name, cats: (a.gastoCats || []).join(", "), ingC, gasP, pend: pendA, libre: ingC - gasP, used: ingC > 0.004 || gasP > 0.004 };
+    }).filter(a => a.used);
+    return { accs, pendMain: pend - pendR, pend, exceso, nPend, ingPlan, ingCons, extra, rate, byRate, ahoPlan, ahoExtra, ahoReal, aho, gasPres, gasReal, libre: (ingCons - ingR) - aho - (gasPres - gasR) };
   }
   function counterHTML(c, k, compact) {
     if (!c) return "";
@@ -528,14 +571,17 @@
     const pct = x => c.ingCons > 0 ? Math.max(0, Math.min(100, x / c.ingCons * 100)) : 0;
     return `<div class="counter ${done ? "ok" : L > 0 ? "free" : "over"}">
       <div class="counter-top"><div><div class="label">${head} · ${esc(MES[+k.split("-")[1] - 1])}</div>
-        <div class="big num">${done ? eur(0) : (L > 0 ? "" : "−") + eur(Math.abs(L))}</div></div>
+        <div class="big num">${done ? eur(0) : (L > 0 ? "" : "−") + eur(Math.abs(L))}</div>
+        ${c.accs.map(a => `<div class="acc-free ${a.libre < -0.5 ? "neg" : ""}">🎫 ${esc(a.name)}: ${a.libre >= 0 ? eur(a.libre) + " por asignar" : eur(-a.libre) + " de más"} <small>(solo ${esc(a.cats)})</small></div>`).join("")}</div>
         ${compact ? "" : `<div class="pend"><div class="label">Pendiente de gastar</div><div class="pend-num num">${eur(c.pend)}</div>
+          ${c.accs.some(a => a.pend > 0.004) ? `<div class="xsmall muted">de ello ${c.accs.filter(a => a.pend > 0.004).map(a => `${eur(a.pend)} ${esc(a.name)}`).join(", ")}</div>` : ""}
           ${c.exceso > 0.004 ? `<div class="xsmall neg">${eur(c.exceso)} de exceso</div>` : `<div class="xsmall muted">en ${c.nPend} partida${c.nPend === 1 ? "" : "s"}</div>`}</div>`}</div>
       <div class="stackbar"><span style="width:${pct(c.aho)}%;background:var(--s1)"></span><span style="width:${pct(c.gasPres)}%;background:var(--s2)"></span></div>
       <div class="counter-lines">
-        <div><span>Ingresos${c.extra > 0.004 ? ` <small class="pos">(+${eur(c.extra)} extra)</small>` : ""}</span><b class="num">${eur(c.ingCons)}</b></div>
+        <div><span>Ingresos${c.extra > 0.004 ? ` <small class="pos">(+${eur(c.extra)} extra)</small>` : ""}${c.accs.length ? ` <small>(sin ${c.accs.map(a => esc(a.name)).join(", ")})</small>` : ""}</span><b class="num">${eur(c.ingCons - c.accs.reduce((x, a) => x + a.ingC, 0))}</b></div>
         <div><span><i class="dot" style="background:var(--s1)"></i>Ahorro${c.ahoExtra > 0.004 ? ` <small>(+${eur(c.ahoExtra)} apartado del extra)</small>` : ""}</span><b class="num">−${eur(c.aho)}</b></div>
-        <div><span><i class="dot" style="background:var(--s2)"></i>Gastos presupuestados</span><b class="num">−${eur(c.gasPres)}</b></div>
+        <div><span><i class="dot" style="background:var(--s2)"></i>Gastos presupuestados${c.accs.length ? ` <small>(sin ${c.accs.map(a => esc(a.name)).join(", ")})</small>` : ""}</span><b class="num">−${eur(c.gasPres - c.accs.reduce((x, a) => x + a.gasP, 0))}</b></div>
+        ${c.accs.map(a => `<div class="acc-line"><span>🎫 ${esc(a.name)}: entra ${eur(a.ingC)} · presupuestado ${eur(a.gasP)}</span><b class="num">${a.libre >= 0 ? "" : "−"}${eur(Math.abs(a.libre))}</b></div>`).join("")}
       </div>
       ${!compact && c.extra - c.ahoExtra > 0.5 ? `<button type="button" class="link counter-save" data-extra="${round2(c.extra - c.ahoExtra)}">Tienes ${eur(c.extra - c.ahoExtra)} de ingresos extra. ¿Apartar una parte para ahorro?</button>` : ""}
       </div>`;
@@ -627,7 +673,9 @@
         const n = noteOf(k, r.cat);
         const it = b.items.find(i => i.row === r.row);
         const ex = Expr.fromFormula(it.f[k]);
-        const sub = hasNote(n) ? (n.nota || n.desglose.map(x => x.l || x.e).filter(Boolean).join(" · ")) : (ex && !Expr.isPlainNumber(ex) ? ex : "");
+        let sub = hasNote(n) ? (n.nota || n.desglose.map(x => x.l || x.e).filter(Boolean).join(" · ")) : (ex && !Expr.isPlainNumber(ex) ? ex : "");
+        const parts = restrictedAccounts().filter(a => accPart(k, r.cat, a.name) > 0);
+        if (parts.length) sub = parts.map(a => `🎫 ${a.name} ${eur(accPart(k, r.cat, a.name))} (gastado ${eur(realAcc(k, r.cat, a.name))})`).join(" · ") + ` · ${Excel.mainAccount()} ${eur(Math.max(0, (r.budget || 0) - parts.reduce((x, a) => x + accPart(k, r.cat, a.name), 0)))}` + (sub ? " · " + sub : "");
         html += `<div class="brow" data-row="${r.row}" style="cursor:pointer"><div class="brow-top"><span class="name">${icon(r.cat)} ${esc(r.cat)} ${hasNote(n) ? `<span class="note-ico" title="Tiene notas">📝</span>` : ""} ${tag}</span><span class="vals num">${eur(r.real)} / <b>${eur(r.budget)}</b></span></div>
           ${sub ? `<div class="brow-sub">${esc(sub)}</div>` : ""}
           <div class="prog ${cls}"><div style="width:${Math.min(100, p * 100)}%"></div></div></div>`;
@@ -638,9 +686,15 @@
     v.appendChild(card);
 
     const actions = document.createElement("div"); actions.className = "btn-row";
-    actions.innerHTML = `<button class="btn secondary" type="button" id="bAll">Editar mes completo</button>`;
+    actions.innerHTML = `<button class="btn secondary" type="button" id="bAll">Editar mes completo</button><button class="btn secondary" type="button" id="bSnap">📸 Congelar</button>`;
     $("#bAll", actions).onclick = () => editBudgetMonth(k);
+    $("#bSnap", actions).onclick = () => freezeBudget(k);
+    const sn = snapsOf(k);
+    const hist = document.createElement("button"); hist.type = "button"; hist.className = "counter-pill";
+    hist.innerHTML = sn.length ? `<span>📸 ${sn.length} foto${sn.length === 1 ? "" : "s"} este mes · última ${esc(snapDate(sn[sn.length - 1].id))} (${esc(sn[sn.length - 1].label)})</span><b>›</b>` : `<span>📸 Aún no has congelado el presupuesto de ${esc(MES[+k.split("-")[1] - 1])}</span><b>›</b>`;
+    hist.onclick = () => snapHistory(k);
     v.appendChild(actions);
+    v.appendChild(hist);
     const note = document.createElement("p"); note.className = "xsmall muted"; note.style.margin = "0 4px";
     note.textContent = `Toca una partida para editarla: admite sumas y restas (p. ej. 8,25 + 144,09 − 30) y un concepto por línea. Se guarda en la hoja PPTO (columna ${b.months.find(m => m.key === k).col}) y las notas en la hoja «App_Notas».`;
     v.appendChild(note);
@@ -692,6 +746,16 @@
     if (!lines) lines = [{ e: cur ? Expr.fmt(cur) : "", l: "" }];
     let lastFocus = null;
     const origLines = lines.map(l => Object.assign({}, l));
+    // Cuentas restringidas que aplican a esta partida (p. ej. Edenred en Restaurantes y Dietas)
+    const accOpts = isSav ? [] : restrictedAccounts().filter(a => it.tipo === "Gasto" ? (a.gastoCats || []).includes(it.cat) : (a.ingresoCats || []).includes(it.cat));
+    const sugAcc = a => {
+      if (it.tipo === "Gasto") { // lo que entra ese mes en la cuenta (partida de ingreso con reparto)
+        const inc = b.items.filter(i => i.tipo === "Ingreso").reduce((x, i) => x + accPart(k, i.cat, a.name), 0);
+        return inc > 0 ? round2(inc) : 0;
+      }
+      const prevK = b.months.filter(x => x.key < k).map(x => x.key).pop();
+      return prevK && accPart(prevK, it.cat, a.name) ? accPart(prevK, it.cat, a.name) : 0;
+    };
     // Ahorro: ¿se calcula con tu tasa? (=ingresos × B17)
     const rate = b.rate ? b.rate.value : 0;
     const canRate = isSav && rate && !!rateFormulaFor(m.col);
@@ -719,6 +783,10 @@
       <div id="lines"></div>
       <div id="ops"></div>
       <div class="total-row"><span>Total partida</span><b class="num" id="tot"></b></div>
+      ${accOpts.map(a => `<div class="acc-box"><label for="acc_${esc(a.name)}">🎫 De ello con <b>${esc(a.name)}</b> <span class="muted xsmall">(${it.tipo === "Ingreso" ? "lo que entra en " + esc(a.name) : "solo se puede gastar en " + esc((a.gastoCats || []).join(", ")) + "; no se reasigna a otras partidas"})</span></label>
+        <div class="acc-row"><input id="acc_${esc(a.name)}" class="acc-in num" data-acc="${esc(a.name)}" inputmode="decimal" value="${accPart(k, it.cat, a.name) ? Expr.fmt(accPart(k, it.cat, a.name)) : ""}" placeholder="0">
+        ${sugAcc(a) ? `<button type="button" class="chip acc-sug" data-acc="${esc(a.name)}" data-v="${sugAcc(a)}">${it.tipo === "Gasto" ? "Lo que entra" : "Como antes"}: ${eur(sugAcc(a))}</button>` : ""}</div>
+        <div class="xsmall muted acc-rest" data-acc="${esc(a.name)}"></div></div>`).join("")}
       <div class="field"><label for="bNote">Recordatorio / comentario</label><textarea id="bNote" rows="2" placeholder="Ej.: incluye seguro moto 2º pago">${esc(note ? note.nota : "")}</textarea></div>
       ${later.length ? `<label class="small" style="display:flex;gap:8px;align-items:center;margin-bottom:14px"><input type="checkbox" id="bLater"> Aplicar también a ${later.map(x => monthShort(x.key)).join(", ")}</label>` : ""}
       <button class="btn" id="bSave" type="button">Guardar</button>
@@ -757,10 +825,16 @@
         else { bad = true; eq.textContent = "¿?"; eq.classList.add("neg"); }
       });
       $("#tot", body).textContent = bad ? "revisa" : eur(round2(tot));
+      $$(".acc-rest", body).forEach(el => {
+        const inp = $(`.acc-in[data-acc="${el.dataset.acc}"]`, body), v2 = parseAmount(inp.value || "0");
+        el.textContent = isNaN(v2) ? "¿?" : (v2 > tot + 0.004 ? `Es más que el total de la partida (${eur(tot)}).` : `Resto con ${Excel.mainAccount()}: ${eur(round2(tot - v2))}`);
+      });
     };
     opBar($("#ops", body), () => lastFocus || $(".expr", box), `<button type="button" class="opk wide" id="addLine">＋ Línea</button>`);
     $("#addLine", body).onclick = () => { lines.push({ e: "", l: "" }); drawLines(); const all = $$(".expr", box); all[all.length - 1].focus(); };
     $$("#quick .chip[data-v]", body).forEach(c => c.onclick = () => { lines = [{ e: Expr.fmt(+c.dataset.v), l: "" }]; rateMode = false; const ri = $("#rateInfo", body); if (ri) ri.textContent = "Importe fijo para este mes."; drawLines(); });
+    $$(".acc-in", body).forEach(inp => { inp.addEventListener("focus", () => lastFocus = inp); inp.addEventListener("input", recalc); });
+    $$(".acc-sug", body).forEach(c => c.onclick = () => { $(`.acc-in[data-acc="${c.dataset.acc}"]`, body).value = Expr.fmt(+c.dataset.v); recalc(); });
     if ($("#rateChip", body)) $("#rateChip", body).onclick = () => {
       lines = [{ e: Expr.fmt(round2(plannedIncome(k) * rate)), l: "" }]; drawLines(); rateMode = true;
       $("#rateInfo", body).innerHTML = `Se calculará solo: <b>${Math.round(rate * 100)}% de tus ingresos previstos</b> (como en tu Excel).`;
@@ -779,8 +853,16 @@
       const notaTxt = $("#bNote", body).value.trim();
       const targets = [m].concat($("#bLater", body) && $("#bLater", body).checked ? later : []);
       const cells = targets.map(x => ({ addr: x.col + row, value: (rateMode && canRate) ? rateFormulaFor(x.col) : cell }));
-      const notes = targets.filter(x => notaTxt || desglose.length || hasNote(noteOf(x.key, it.cat)))
-        .map(x => ({ mes: x.key, cat: it.cat, nota: notaTxt, desglose }));
+      const cuentas = {};
+      for (const inp of $$(".acc-in", body)) {
+        if (!inp.value.trim()) continue;
+        const v2 = parseAmount(inp.value);
+        if (isNaN(v2)) return toast("Revisa el importe de " + inp.dataset.acc);
+        if (v2 > 0) cuentas[inp.dataset.acc] = round2(v2);
+      }
+      const hadCu = x => { const n0 = noteOf(x.key, it.cat); return n0 && n0.cuentas && Object.keys(n0.cuentas).length; };
+      const notes = targets.filter(x => notaTxt || desglose.length || hasNote(noteOf(x.key, it.cat)) || Object.keys(cuentas).length || hadCu(x))
+        .map(x => ({ mes: x.key, cat: it.cat, nota: notaTxt, desglose, cuentas: accOpts.length ? cuentas : undefined }));
       closeSheet();
       const list = [{ type: "setBudgetCells", data: { cells } }];
       if (notes.length) list.push({ type: "setNotes", data: { notes } });
@@ -878,6 +960,113 @@
     openSheet(`Presupuesto · ${monthLabel(k)}`, body);
   }
 
+  // ── Fotos del presupuesto (congelar) ──────────────────────
+  function snapsOf(k) { return (S.model.snaps || []).filter(x => x.mes === k).sort((a, b) => a.id.localeCompare(b.id)); }
+  function nowStamp() { const d = new Date(); const p2 = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; }
+  function snapDate(id) { const [d, t] = id.split(" "); const dt = new Date(d + "T12:00"); return dt.toLocaleDateString("es-ES", { day: "numeric", month: "short" }) + (t ? " " + t.slice(0, 5) : ""); }
+  // Estado actual del presupuesto de un mes, en el mismo formato que una foto
+  function currentRows(k) {
+    const b = S.model.budget, rows = [];
+    b.items.forEach(i => {
+      const cu = {}; restrictedAccounts().forEach(a => { const v = accPart(k, i.cat, a.name); if (v) cu[a.name] = v; });
+      rows.push({ tipo: i.tipo, cat: i.cat, v: round2(i.vals[k] || 0), cuentas: cu });
+    });
+    if (b.savings) rows.push({ tipo: "Ahorro", cat: "Ahorro", v: round2(b.savings.vals[k] || 0), cuentas: {} });
+    return rows;
+  }
+  function rowsToItems(rows) { const o = {}; rows.forEach(r => o[r.cat] = { tipo: r.tipo, v: r.v, cuentas: r.cuentas }); return o; }
+  function snapTotals(items) {
+    let ing = 0, gas = 0, aho = 0;
+    Object.values(items).forEach(x => { if (x.tipo === "Ingreso") ing += x.v; else if (x.tipo === "Gasto") gas += x.v; else if (x.tipo === "Ahorro") aho += x.v; });
+    return { ing, gas, aho, libre: ing - aho - gas };
+  }
+  function snapDiff(a, b) { // a → b
+    const out = [];
+    Object.keys(b).filter(c => a[c]).forEach(c => { const x = a[c].v, y = b[c].v; if (Math.abs(y - x) > 0.004) out.push({ cat: c, from: x, to: y, d: round2(y - x), tipo: (b[c] || a[c]).tipo }); });
+    return out.sort((p, q) => Math.abs(q.d) - Math.abs(p.d));
+  }
+  function snapOp(k, label) { return { type: "addSnapshot", data: { id: `${nowStamp()} ${k}#${Math.random().toString(36).slice(2, 6)}`, mes: k, label, rows: currentRows(k) } }; }
+  function monthsOfCells(cells) {
+    const b = S.model.budget, set = new Set();
+    cells.forEach(c => { const col = Excel.parseAddr(c.addr).c1; const m = b.months.find(x => Excel.colNumber(x.col) === col); if (m) set.add(m.key); });
+    return Array.from(set);
+  }
+  function diffChips(diff, max) {
+    return diff.slice(0, max || 99).map(x => `<span class="dchip ${x.d > 0 ? "up" : "down"}">${x.d > 0 ? "▲" : "▼"} ${esc(x.cat)} ${x.d > 0 ? "+" : "−"}${eur(Math.abs(x.d))}</span>`).join("") + (diff.length > (max || 99) ? `<span class="dchip">+${diff.length - max} más</span>` : "");
+  }
+
+  function freezeBudget(k) {
+    const snaps = snapsOf(k), last = snaps[snaps.length - 1];
+    const cur = rowsToItems(currentRows(k));
+    const diff = last ? snapDiff(last.items, cur) : [];
+    const t = snapTotals(cur);
+    const def = snaps.length ? `Reajuste ${new Date().toLocaleDateString("es-ES", { day: "numeric", month: "short" })}` : "Inicial";
+    const body = document.createElement("div");
+    body.innerHTML = `<p class="small" style="margin-top:0">Guarda una foto del presupuesto de <b>${esc(monthLabel(k))}</b> tal como está ahora. Así podrás ver después qué partidas reorganizas y comparar lo gastado con lo que tenías previsto al principio.</p>
+      <div class="mini-kpis"><div><span>Ingresos</span><b class="num">${eur(t.ing)}</b></div><div><span>Ahorro</span><b class="num">${eur(t.aho)}</b></div><div><span>Gastos</span><b class="num">${eur(t.gas)}</b></div></div>
+      ${last ? `<div class="small" style="margin:10px 0 6px">${diff.length ? `Cambios desde la última foto (${esc(snapDate(last.id))}):` : `Sin cambios desde la última foto (${esc(snapDate(last.id))}).`}</div><div class="dchips">${diffChips(diff, 12)}</div>` : `<p class="xsmall muted">Es la primera foto de este mes.</p>`}
+      <div class="field" style="margin-top:12px"><label for="sLabel">Nombre de la foto</label><input id="sLabel" value="${esc(def)}"></div>
+      <button class="btn" id="sGo" type="button">📸 Congelar presupuesto</button>`;
+    $("#sGo", body).onclick = async () => {
+      const op = snapOp(k, $("#sLabel", body).value.trim() || def);
+      closeSheet();
+      await doOps([op], "Presupuesto congelado");
+    };
+    openSheet("Congelar presupuesto", body);
+  }
+
+  function snapHistory(k) {
+    const snaps = snapsOf(k);
+    const cur = { id: "", label: "Ahora", items: rowsToItems(currentRows(k)), now: true };
+    const all = snaps.concat(snaps.length && snapDiff(snaps[snaps.length - 1].items, cur.items).length ? [cur] : []);
+    const body = document.createElement("div");
+    if (!snaps.length) body.innerHTML = `<p class="small muted">Aún no hay fotos de ${esc(monthLabel(k))}.</p>`;
+    else {
+      const first = snaps[0], tf = snapTotals(first.items), tc = snapTotals(cur.items);
+      body.innerHTML = `<div class="mini-kpis"><div><span>Gastos al inicio</span><b class="num">${eur(tf.gas)}</b></div><div><span>Gastos ahora</span><b class="num">${eur(tc.gas)}</b></div><div><span>Reajustes</span><b class="num">${all.length - 1}</b></div></div>
+        <div class="timeline">${all.map((s2, i) => {
+          const prev = all[i - 1], diff = prev ? snapDiff(prev.items, s2.items) : [], t = snapTotals(s2.items);
+          return `<div class="tl-item ${s2.now ? "now" : ""}"><div class="tl-dot"></div><div class="tl-body">
+            <div class="tl-head"><b>${esc(s2.label || "Foto")}</b><span class="xsmall muted">${s2.now ? "sin congelar" : esc(snapDate(s2.id))}</span></div>
+            <div class="xsmall muted">Gastos ${eur(t.gas)} · ahorro ${eur(t.aho)} · por asignar ${eur(t.libre)}</div>
+            ${prev ? (diff.length ? `<div class="dchips">${diffChips(diff)}</div>` : `<div class="xsmall muted">Sin cambios</div>`) : ""}
+            ${s2.now ? `<button class="link" type="button" data-freeze="1">Congelar ahora</button>` : `<button class="link del-snap" type="button" data-id="${esc(s2.id)}">Borrar foto</button>`}
+          </div></div>`;
+        }).join("")}</div>`;
+    }
+    body.insertAdjacentHTML("beforeend", `<div style="height:12px"></div><button class="btn" id="hFreeze" type="button">📸 Congelar presupuesto</button>`);
+    $("#hFreeze", body).onclick = () => { closeSheet(); setTimeout(() => freezeBudget(k), 60); };
+    $$("[data-freeze]", body).forEach(b2 => b2.onclick = () => { closeSheet(); setTimeout(() => freezeBudget(k), 60); });
+    $$(".del-snap", body).forEach(b2 => b2.onclick = async () => {
+      if (!confirm("¿Borrar esta foto del presupuesto?")) return;
+      closeSheet(); await doOps([{ type: "deleteSnapshot", data: { id: b2.dataset.id } }], "Foto borrada");
+    });
+    openSheet(`Fotos · ${monthLabel(k)}`, body);
+  }
+
+  // Presupuesto inicial (primera foto) o, si no hay fotos, el actual
+  function initialBudget(cat, k) {
+    const s0 = snapsOf(k)[0];
+    if (s0 && s0.items[cat]) return s0.items[cat].v;
+    return budgetOf(cat, k);
+  }
+  // Estadísticas de reorganización por partida en todos los meses con fotos
+  function reorgStats() {
+    const b = S.model.budget, months = Array.from(new Set((S.model.snaps || []).map(x => x.mes))).sort();
+    const st = {};
+    months.forEach(k => {
+      const snaps = snapsOf(k), cur = rowsToItems(currentRows(k));
+      const seq = snaps.map(x => x.items).concat([cur]);
+      for (let i = 1; i < seq.length; i++) snapDiff(seq[i - 1], seq[i]).forEach(d => {
+        const o = st[d.cat] = st[d.cat] || { cat: d.cat, tipo: d.tipo, changes: 0, up: 0, down: 0, net: 0, months: new Set() };
+        o.changes++; if (d.d > 0) o.up += d.d; else o.down -= d.d; o.months.add(k);
+      });
+      snapDiff(seq[0], cur).forEach(d => { const o = st[d.cat]; if (o) o.net += d.d; });
+    });
+    Object.values(st).forEach(o => { o.nMonths = o.months.size; o.avgNet = o.net / Math.max(1, months.length); });
+    return { months, list: Object.values(st).sort((a, b2) => b2.changes - a.changes || (b2.up + b2.down) - (a.up + a.down)) };
+  }
+
   // ── Planificar: consejos y referencias para presupuestar ──
   function insights(k) {
     const b = S.model.budget, out = [], mk = MES[+k.split("-")[1] - 1];
@@ -897,6 +1086,13 @@
         const prev = (s.vals[0] + s.vals[1]) / 2, last = s.vals[2];
         if (last > prev * 1.35 && last - prev > 25) out.push({ ico: "📈", impact: last - prev, cat: i.cat, text: `<b>${esc(i.cat)}</b> sube: ${eur(last)} en ${esc(monthShort(s.ref[2]))} frente a ${eur(prev)} de media antes.` });
       }
+    });
+    reorgStats().list.filter(o => o.tipo === "Gasto" && o.nMonths >= 2 && o.avgNet >= 15).forEach(o => {
+      const bud = budgetOf(o.cat, k);
+      out.push({ ico: "🔁", impact: o.avgNet + 20, cat: o.cat, text: `<b>${esc(o.cat)}</b>: la subes durante el mes en ${o.nMonths} meses (+${eur(o.avgNet)} de media). ${bud != null ? `Empieza ${mk} con ~${eur(Math.round(bud + o.avgNet))} en vez de ${eur(bud)}.` : ""}` });
+    });
+    reorgStats().list.filter(o => o.tipo === "Gasto" && o.nMonths >= 2 && o.avgNet <= -15).forEach(o => {
+      out.push({ ico: "🔁", impact: -o.avgNet, cat: o.cat, text: `<b>${esc(o.cat)}</b>: sueles bajarla durante el mes (${eur(o.avgNet)} de media). Es una buena fuente para reasignar desde el principio.` });
     });
     const c = counter(k);
     if (c) {
@@ -940,16 +1136,53 @@
     $$(".ref-row", cr).forEach(r => r.onclick = () => editBudgetItem(+r.dataset.row, k));
     v.appendChild(cr);
 
-    // Desviación media
-    const devs = b.items.filter(i => i.tipo === "Gasto").map(i => ({ i, s: catStats(i.cat, k) })).filter(x => x.s.dev != null && Math.abs(x.s.dev) >= 1)
-      .sort((a, b2) => b2.s.dev - a.s.dev);
+    // Desviación media (frente al presupuesto inicial o al final)
+    const hasSnapsRef = ref.some(m => snapsOf(m).length);
+    const base = hasSnapsRef && S.devBase === "init" ? "init" : "final";
+    const dkey = base === "init" ? "devInit" : "dev";
+    const devs = b.items.filter(i => i.tipo === "Gasto").map(i => ({ i, s: catStats(i.cat, k) })).filter(x => x.s[dkey] != null && Math.abs(x.s[dkey]) >= 1)
+      .sort((a, b2) => b2.s[dkey] - a.s[dkey]);
     if (devs.length) {
-      const cd = card("¿Dónde fallaba el presupuesto?", v, `Diferencia media entre lo gastado y lo presupuestado (${ref.map(monthShort).join(", ")}).`);
+      const cd = card("¿Dónde fallaba el presupuesto?", v, `Diferencia media entre lo gastado y lo presupuestado ${base === "init" ? "<b>al inicio de cada mes</b>" : "(presupuesto final)"} · ${ref.map(monthShort).join(", ")}.`);
+      if (hasSnapsRef) {
+        const sg = document.createElement("div"); sg.className = "seg"; sg.style.margin = "0 0 10px";
+        sg.innerHTML = `<button type="button" class="${base === "final" ? "on" : ""}" data-b="final">Presupuesto final</button><button type="button" class="${base === "init" ? "on" : ""}" data-b="init">Presupuesto inicial</button>`;
+        $$("button", sg).forEach(x => x.onclick = () => { S.devBase = x.dataset.b; render(); });
+        $(".ch", cd).before(sg);
+      }
       requestAnimationFrame(() => Charts.diverging($(".ch", cd), devs.map(x => ({
-        label: x.i.cat, value: x.s.dev,
-        tip: `De media gastaste ${eur(x.s.avg)}; ${x.s.dev > 0 ? "te pasaste " + eur(x.s.dev) : "te sobraron " + eur(-x.s.dev)} al mes.`,
+        label: x.i.cat, value: x.s[dkey],
+        tip: `De media gastaste ${eur(x.s.avg)}; ${x.s[dkey] > 0 ? "te pasaste " + eur(x.s[dkey]) : "te sobraron " + eur(-x.s[dkey])} al mes${base === "init" ? " respecto a lo que presupuestaste al empezar" : ""}.`,
         onClick: () => editBudgetItem(x.i.row, k)
       }))));
+    }
+
+    // Reorganizaciones del presupuesto
+    const rs = reorgStats();
+    const cro = document.createElement("div"); cro.className = "card";
+    if (!rs.months.length) {
+      cro.innerHTML = `<h3>Reorganizaciones del presupuesto</h3><p class="small muted" style="margin:0">Cuando congeles el presupuesto (📸 en Gastos) verás aquí qué partidas reorganizas más y cuánto se mueven a lo largo del mes.</p>`;
+      v.appendChild(cro);
+    } else {
+      const sk = snapsOf(k), curK = rowsToItems(currentRows(k));
+      const dK = sk.length ? snapDiff(sk[0].items, curK) : [];
+      cro.innerHTML = `<h3>Reorganizaciones del presupuesto</h3>
+        <p class="xsmall muted" style="margin:-6px 0 8px">${rs.months.length} mes${rs.months.length === 1 ? "" : "es"} con fotos (${rs.months.map(monthShort).join(", ")}).</p>
+        ${sk.length ? `<div class="small" style="margin-bottom:6px">En <b>${esc(mk)}</b>, del inicio a ahora (${sk.length} foto${sk.length === 1 ? "" : "s"}):</div><div class="dchips" style="margin-bottom:10px">${dK.length ? diffChips(dK, 8) : `<span class="xsmall muted">sin cambios</span>`}</div>` : ""}
+        <table class="table"><thead><tr><th>Partida</th><th>Cambios</th><th>Subidas</th><th>Bajadas</th></tr></thead><tbody>
+        ${rs.list.slice(0, 8).map(o => `<tr><td>${icon(o.cat)} ${esc(o.cat)}</td><td class="num">${o.changes}</td><td class="num pos">${o.up ? "+" + eur(o.up) : "—"}</td><td class="num neg">${o.down ? "−" + eur(o.down) : "—"}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Sin cambios todavía</td></tr>`}
+        </tbody></table><div class="ch" style="margin-top:12px"></div>`;
+      $(".table", cro).insertAdjacentHTML("beforebegin", `<button type="button" class="link" id="seeHist" style="margin-bottom:8px">Ver fotos de ${esc(mk)} ›</button>`);
+      $("#seeHist", cro).onclick = () => snapHistory(k);
+      v.appendChild(cro);
+      const nets = rs.list.filter(o => Math.abs(o.avgNet) >= 1 && o.tipo === "Gasto").sort((a, b2) => b2.avgNet - a.avgNet);
+      if (nets.length) {
+        $(".ch", cro).insertAdjacentHTML("beforebegin", `<div class="small" style="margin-top:10px"><b>Cuánto cambia cada partida durante el mes</b> <span class="xsmall muted">(media del inicio al final)</span></div>`);
+        requestAnimationFrame(() => Charts.diverging($(".ch", cro), nets.map(o => ({
+          label: o.cat, value: o.avgNet,
+          tip: `La has cambiado ${o.changes} ${o.changes === 1 ? "vez" : "veces"} en ${o.nMonths} mes${o.nMonths === 1 ? "" : "es"}: subidas ${eur(o.up)}, bajadas ${eur(o.down)}.`
+        })), { leftLabel: "← la bajas", rightLabel: "la subes →" }));
+      }
     }
 
     // Fijos vs variables
@@ -995,8 +1228,9 @@
     Charts.donut($(".ch", c1), data, { center: "gastado" });
 
     // Real vs presupuesto
-    const rows = budgetRows(k, "Gasto").filter(r => r.real > 0 || (r.budget || 0) > 0).sort((a, b) => b.real - a.real).map(r => ({ label: r.cat, real: r.real, budget: r.budget, onClick: () => goMovs({ cat: r.cat, month: k }) }));
-    const c2 = card("Real vs presupuesto", v, rows.some(r => r.budget != null) ? "La raya negra es el presupuesto; en rojo, lo que se pasa. Toca una barra para ver sus movimientos." : "Este mes no tiene presupuesto en PPTO.");
+    const hasSn = snapsOf(k).length > 0;
+    const rows = budgetRows(k, "Gasto").filter(r => r.real > 0 || (r.budget || 0) > 0).sort((a, b) => b.real - a.real).map(r => ({ label: r.cat, real: r.real, budget: r.budget, budget0: hasSn ? initialBudget(r.cat, k) : null, onClick: () => goMovs({ cat: r.cat, month: k }) }));
+    const c2 = card("Real vs presupuesto", v, rows.some(r => r.budget != null) ? `La raya negra es el presupuesto${hasSn ? "; la gris discontinua, el que tenías al empezar el mes" : ""}. En rojo, lo que se pasa. Toca una barra para ver sus movimientos.` : "Este mes no tiene presupuesto en PPTO.");
     requestAnimationFrame(() => Charts.bullet($(".ch", c2), rows));
 
     // Acceso a la planificación del siguiente mes
@@ -1358,6 +1592,7 @@
         ${S.queue.length ? `<div class="xsmall" style="color:var(--warn)">${S.queue.length} cambio(s) pendiente(s) de subir</div>` : ""}</div>
       <button class="btn" id="sRef" type="button">Actualizar desde el Excel</button><div style="height:10px"></div>
       ${S.file && S.file.webUrl ? `<a class="btn secondary" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box" href="${esc(S.file.webUrl)}" target="_blank" rel="noopener">Abrir el Excel en OneDrive</a><div style="height:10px"></div>` : ""}
+      <label class="small" style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><input type="checkbox" id="sAuto" ${st.autoSnap !== false ? "checked" : ""}> Congelar automáticamente el presupuesto inicial antes del primer cambio de cada mes</label>
       <label class="small" style="display:flex;gap:8px;align-items:center;margin-bottom:14px"><input type="checkbox" id="sAsk" ${st.askSavings !== false ? "checked" : ""}> Preguntarme si aparto ahorro cuando entra un ingreso no previsto</label>
       <div class="field"><label>Tema</label><select id="sTheme"><option value="auto">Automático</option><option value="light">Claro</option><option value="dark">Oscuro</option></select></div>
       ${S.mode === "graph" ? `<button class="btn secondary" id="sFile" type="button">Cambiar de archivo</button><div style="height:10px"></div>` : ""}
@@ -1367,9 +1602,10 @@
         <p class="xsmall muted">Dirección de redirección: <code>${esc(Auth.redirectUri())}</code></p>
         <button class="btn secondary" id="sSaveC" type="button">Guardar</button></details>
       <button class="btn danger" id="sOut" type="button">${S.mode === "demo" ? "Salir del modo demo" : "Cerrar sesión"}</button>
-      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.7</p>`;
+      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.8</p>`;
     $("#sTheme", body).value = st.theme || "auto";
     $("#sAsk", body).onchange = e => saveSettings({ askSavings: e.target.checked });
+    $("#sAuto", body).onchange = e => saveSettings({ autoSnap: e.target.checked });
     $("#sTheme", body).onchange = e => { saveSettings({ theme: e.target.value }); applyTheme(); render(); };
     $("#sAuth", body).value = Auth.cfg().authority;
     $("#sRef", body).onclick = () => { closeSheet(); refresh(); };

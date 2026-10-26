@@ -99,3 +99,23 @@ Los importes reales del mes se calculan igual que tu hoja P&G: suma por categor�
 - Si ese mes ya has traspasado el ahorro, bajar el previsto no libera dinero: para eso está «Retirar del ahorro».
 - En **Editar mes completo** también puedes cambiar el ahorro previsto, y el contador se mueve mientras escribes.
 - En **Nuevo movimiento → Ahorro** puedes elegir **Aportar** o **Retirar**. Las retiradas se ven como «← importe».
+
+## Novedades v1.8: cuentas y fotos del presupuesto
+
+**Cuentas (Openbank y Edenred)**
+- Al registrar un gasto de **Restaurantes** (o el ingreso de **Dietas**) eliges si es con **Openbank** o con **Edenred**. En el resto de categorías solo existe Openbank. La app recuerda la última cuenta usada en cada categoría.
+- Se guarda en una columna nueva, **«Cuenta»**, de tu tabla de movimientos (BDD_transacciones), que la app crea sola. Los movimientos antiguos con «Edenred» en la nota se reconocen automáticamente.
+- En la partida de **Restaurantes** indicas **«De ello con Edenred»**, y en **Dietas** cuánto entra en Edenred. Esa parte no cuenta como dinero reasignable: el contador muestra aparte «🎫 Edenred: X € por asignar (solo Restaurantes)», y «Pendiente de gastar» dice cuánto es de Edenred.
+- En Movimientos puedes filtrar por cuenta.
+- Para añadir más cuentas en el futuro: `ACCOUNTS` en `config.js`.
+
+**Congelar presupuesto (fotos)**
+- En Presupuesto, **📸 Congelar** guarda una foto del presupuesto del mes tal como está, con el nombre que quieras (Inicial, Reajuste 15 oct…). Antes de guardarla te enseña qué ha cambiado desde la última.
+- La primera vez que cambias el presupuesto de un mes, la app guarda sola una foto «Inicial (automática)». Se puede desactivar en ⚙️ Ajustes.
+- Las fotos se guardan en una hoja nueva del Excel, **«App_Fotos»**, con una fila por partida (fecha, mes, etiqueta, categoría, importe), lista para tablas dinámicas.
+- **Historial del mes:** cada foto con lo que subiste o bajaste respecto a la anterior.
+- **En Planificar:**
+  - «Reorganizaciones del presupuesto»: qué partidas cambias más, cuánto subes y bajas, y cuánto cambia cada partida de media del inicio al final del mes.
+  - «¿Dónde fallaba el presupuesto?» se puede ver frente al **presupuesto inicial** o al final.
+  - Consejos del tipo «Restaurantes: la subes durante el mes; empieza con ~X €».
+- **En Análisis:** «Real vs presupuesto» marca con una raya gris el presupuesto que tenías al empezar el mes.
