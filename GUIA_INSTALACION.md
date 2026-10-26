@@ -119,3 +119,13 @@ Los importes reales del mes se calculan igual que tu hoja P&G: suma por categor�
   - «¿Dónde fallaba el presupuesto?» se puede ver frente al **presupuesto inicial** o al final.
   - Consejos del tipo «Restaurantes: la subes durante el mes; empieza con ~X €».
 - **En Análisis:** «Real vs presupuesto» marca con una raya gris el presupuesto que tenías al empezar el mes.
+
+## Novedades v1.9 (correcciones)
+
+- **La pregunta del ahorro desaparece al contestarla**, tanto la ventana como el aviso del contador, y no vuelve a salir para ese dinero. Solo vuelve si entra otro ingreso extra.
+- **Buscador de movimientos:** el teclado ya no se cierra al escribir.
+- **Botón «atrás» del móvil:**
+  - Cierra la ventana abierta.
+  - Si llegaste a Movimientos desde una partida («Ver los movimientos de…»), te devuelve a esa partida abierta. Lo mismo desde Inicio o Análisis: vuelves a donde estabas.
+  - Desde otra pestaña, vuelve a Inicio.
+  - En Inicio, pulsa atrás dos veces para salir de la app.

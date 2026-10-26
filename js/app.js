@@ -51,6 +51,7 @@
     if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
     bindChrome();
     try { await Auth.handleRedirect(); } catch (e) { toast("Inicio de sesión: " + e.message, 5000); }
+    armBack();
 
     if (new URLSearchParams(location.search).get("nuevo")) { S.pendingNew = true; history.replaceState(null, "", Auth.redirectUri()); }
     const st = settings();
@@ -195,9 +196,19 @@
       refresh();
     });
     $$("[data-close]").forEach(b => b.addEventListener("click", closeSheet));
-    let resizeT; window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => S.model && render(), 200); });
+    let resizeT, lastW = window.innerWidth;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeT);
+      resizeT = setTimeout(() => {
+        if (Math.abs(window.innerWidth - lastW) < 2) return; // abrir/cerrar el teclado no repinta
+        lastW = window.innerWidth;
+        if (S.model) render();
+      }, 200);
+    });
   }
-  function go(view) {
+  function go(view, keepStack) {
+    if (!keepStack) Nav.stack.length = 0;
+    armBack();
     S.view = view; Charts.hideTip();
     $$(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === view));
     window.scrollTo(0, 0);
@@ -226,8 +237,11 @@
     $("#viewTitle").textContent = TITLES[S.view];
     $$(".view").forEach(v => v.hidden = v.id !== "view-" + S.view);
     const v = $("#view-" + S.view);
+    const ae = document.activeElement, keepSearch = ae && ae.classList && ae.classList.contains("search") && v.contains(ae);
+    const selA = keepSearch ? ae.selectionStart : null, selZ = keepSearch ? ae.selectionEnd : null;
     ({ inicio: renderInicio, movimientos: renderMovs, presupuesto: renderBudget, analisis: renderAnalisis, patrimonio: renderPatrimonio })[S.view](v);
     $$(".tab-badge").forEach(x => x.remove());
+    if (keepSearch) { const ns = $(".search", v); if (ns) { ns.focus({ preventScroll: true }); try { ns.setSelectionRange(selA, selZ); } catch (e) {} } }
     if (S.pendingNew) { S.pendingNew = false; setTimeout(() => openTxForm(), 200); }
   }
 
@@ -270,7 +284,7 @@
     if (cIni) {
       const row = document.createElement("button"); row.type = "button"; row.className = "counter-pill " + (Math.abs(cIni.libre) < 1 ? "ok" : cIni.libre > 0 ? "free" : "over");
       row.innerHTML = `<span>${Math.abs(cIni.libre) < 1 ? "Presupuesto de " + MES[+k.split("-")[1] - 1] + " cuadrado ✓" : cIni.libre > 0 ? "Por asignar tras el ahorro" : "Asignado de más"}</span><b class="num">${Math.abs(cIni.libre) < 1 ? "" : eur(Math.abs(cIni.libre))} ›</b>`;
-      row.onclick = () => { S.budgetSeg = "Gasto"; go("presupuesto"); };
+      row.onclick = () => drill("presupuesto", () => { S.budgetSeg = "Gasto"; });
       v.appendChild(row);
     }
 
@@ -279,14 +293,14 @@
     if (over.length) {
       const al = document.createElement("div"); al.className = "alert";
       al.innerHTML = `<span class="i">!</span><div><b>Revisar:</b> ${over.slice(0, 4).map(r => `${esc(r.cat)} (+${eur(r.real - r.budget)})`).join(", ")}${over.length > 4 ? ` y ${over.length - 4} más` : ""}</div>`;
-      al.style.cursor = "pointer"; al.onclick = () => { S.budgetSeg = "Gasto"; go("presupuesto"); };
+      al.style.cursor = "pointer"; al.onclick = () => drill("presupuesto", () => { S.budgetSeg = "Gasto"; });
       v.appendChild(al);
     }
 
     // Gráfico mensual
     const c1 = document.createElement("div"); c1.className = "card";
     c1.innerHTML = `<div class="card-head"><h3>Gasto por mes</h3><button class="link" type="button">Ver análisis</button></div><div class="ch"></div>`;
-    $(".link", c1).onclick = () => go("analisis");
+    $(".link", c1).onclick = () => drill("analisis");
     v.appendChild(c1);
     const tm = txMonths().filter(m => m <= todayISO().slice(0, 7)).slice(-6);
     requestAnimationFrame(() => Charts.stackedBars($(".ch", c1), tm.map(monthShort), [
@@ -297,7 +311,7 @@
     // Últimos movimientos
     const c2 = document.createElement("div"); c2.className = "card";
     c2.innerHTML = `<div class="card-head"><h3>Últimos movimientos</h3><button class="link" type="button">Ver todos</button></div><div class="list"></div>`;
-    $(".link", c2).onclick = () => go("movimientos");
+    $(".link", c2).onclick = () => goMovs({});
     const list = $(".list", c2);
     S.model.tx.list.slice(0, 6).forEach(t => list.appendChild(txRow(t)));
     if (!S.model.tx.list.length) list.innerHTML = `<div class="empty">Aún no hay movimientos.</div>`;
@@ -316,9 +330,10 @@
   }
 
   // ── MOVIMIENTOS ───────────────────────────────────────────
-  function goMovs(filter) {
+  function goMovs(filter, reopen) {
+    pushNav(reopen);
     Object.assign(S.movFilter, { q: "", tipo: "Todos", cat: "", month: "", acc: "", limit: 60 }, filter || {});
-    go("movimientos");
+    go("movimientos", true);
   }
   function renderMovs(v) {
     const F = S.movFilter;
@@ -583,7 +598,7 @@
         <div><span><i class="dot" style="background:var(--s2)"></i>Gastos presupuestados${c.accs.length ? ` <small>(sin ${c.accs.map(a => esc(a.name)).join(", ")})</small>` : ""}</span><b class="num">−${eur(c.gasPres - c.accs.reduce((x, a) => x + a.gasP, 0))}</b></div>
         ${c.accs.map(a => `<div class="acc-line"><span>🎫 ${esc(a.name)}: entra ${eur(a.ingC)} · presupuestado ${eur(a.gasP)}</span><b class="num">${a.libre >= 0 ? "" : "−"}${eur(Math.abs(a.libre))}</b></div>`).join("")}
       </div>
-      ${!compact && c.extra - c.ahoExtra > 0.5 ? `<button type="button" class="link counter-save" data-extra="${round2(c.extra - c.ahoExtra)}">Tienes ${eur(c.extra - c.ahoExtra)} de ingresos extra. ¿Apartar una parte para ahorro?</button>` : ""}
+      ${!compact && c.extra - c.ahoExtra > 0.5 && c.extra > (+((noteOf(k, "_ahorroExtra") || {}).nota) || 0) + 0.5 ? `<button type="button" class="link counter-save" data-extra="${round2(c.extra - c.ahoExtra)}">Tienes ${eur(c.extra - c.ahoExtra)} de ingresos extra. ¿Apartar una parte para ahorro?</button>` : ""}
       </div>`;
   }
 
@@ -599,12 +614,17 @@
       <button class="btn secondary" id="aNo" type="button">No, dejarlo para asignar</button>
       <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="aNever"> No volver a preguntar (se puede cambiar en Ajustes)</label>
       <p class="xsmall muted">Se registra como un movimiento de Ahorro con la nota «Ahorro extra», que el contador descuenta.</p>`;
+    let answered = false;
     const done = async amt => {
+      if (answered) return; answered = true;
       if ($("#aNever", body).checked) saveSettings({ askSavings: false });
       closeSheet();
-      if (!(amt > 0)) return;
-      const tx = { tipo: "Ahorro", nat: Excel.SAVING.nat, per: Excel.SAVING.per, cat: "Ahorro", fecha: o.fecha, importe: round2(amt), notas: "Ahorro extra · " + o.origen };
-      await doOp("addTx", { tx }, `Apartados ${eur(amt)} para ahorro`);
+      // Se guarda que ya contestaste para este importe extra del mes (no vuelve a salir el aviso)
+      const mk = String(o.fecha).slice(0, 7), c = counter(mk);
+      const list = [];
+      if (c) list.push({ type: "setNotes", data: { notes: [{ mes: mk, cat: "_ahorroExtra", nota: String(round2(c.extra)), desglose: [] }] } });
+      if (amt > 0) list.push({ type: "addTx", data: { tx: { tipo: "Ahorro", nat: Excel.SAVING.nat, per: Excel.SAVING.per, cat: "Ahorro", fecha: o.fecha, importe: round2(amt), notas: "Ahorro extra · " + o.origen } } });
+      if (list.length) await doOps(list, amt > 0 ? `Apartados ${eur(amt)} para ahorro` : "De acuerdo: queda para asignar");
     };
     if ($("#aRate", body)) $("#aRate", body).onclick = () => done(sug);
     $("#aOther", body).onclick = () => { const a = parseAmount($("#aAmt", body).value); if (!(a > 0)) return toast("Escribe una cantidad"); done(a); };
@@ -845,7 +865,7 @@
       Charts.stackedBars($("#bHist", body), ms.map(monthShort), [{ name: "Real", color: SERIES[0], values: ms.map(x => realCat(x, it.cat)) }],
         { height: 130, target: ms.map(x => budgetOf(it.cat, x)), targetName: isSav ? "Previsto" : "Presupuesto", fullLabels: ms.map(monthLabel) });
     });
-    if ($("#bMovs", body)) $("#bMovs", body).onclick = () => { closeSheet(); goMovs({ cat: it.cat, month: k }); };
+    if ($("#bMovs", body)) $("#bMovs", body).onclick = () => { closeSheet(); goMovs({ cat: it.cat, month: k }, () => editBudgetItem(row, k)); };
 
     $("#bSave", body).onclick = async () => {
       for (const l of lines) if ((l.e || "").trim() && !Expr.tryEval(l.e).ok) return toast("Revisa el importe: " + l.e);
@@ -1238,7 +1258,7 @@
     if (nextB) {
       const pl = document.createElement("button"); pl.type = "button"; pl.className = "counter-pill free";
       pl.innerHTML = `<span>💡 Consejos y referencias para presupuestar ${MES[+nextB.split("-")[1] - 1]}</span><b>›</b>`;
-      pl.onclick = () => { S.month = nextB; S.budgetSeg = "Plan"; go("presupuesto"); };
+      pl.onclick = () => drill("presupuesto", () => { S.month = nextB; S.budgetSeg = "Plan"; });
       v.appendChild(pl);
     }
 
@@ -1498,19 +1518,50 @@
     openSheet(i >= 0 ? "Editar meta" : "Nueva meta", body);
   }
 
-  // ── Hoja inferior ─────────────────────────────────────────
+  // ── Hoja inferior y botón «atrás» del móvil ─────────────
+  // Hay una entrada «guardia» en el historial: cada pulsación de atrás llega a la app, que decide
+  // qué hacer (cerrar la ventana, volver a la pantalla anterior, ir a Inicio o salir).
+  const Nav = { stack: [], armed: false, exitAt: 0 };
+  function armBack() {
+    try {
+      if (!Nav.armed) { Nav.armed = true; history.replaceState({ fin: "base" }, ""); history.pushState({ fin: "guard" }, ""); }
+      else if (!history.state || history.state.fin !== "guard") history.pushState({ fin: "guard" }, "");
+    } catch (e) {}
+  }
+  function pushNav(reopen) {
+    Nav.stack.push({ view: S.view, month: S.month, budgetSeg: S.budgetSeg, patSeg: S.patSeg, scroll: window.scrollY, reopen });
+    if (Nav.stack.length > 20) Nav.stack.shift();
+  }
+  function restoreNav(e) {
+    Object.assign(S, { month: e.month, budgetSeg: e.budgetSeg, patSeg: e.patSeg });
+    go(e.view, true);
+    requestAnimationFrame(() => window.scrollTo(0, e.scroll || 0));
+    if (e.reopen) setTimeout(e.reopen, 80);
+  }
+  // Navegar a otra pantalla recordando de dónde vienes (para que «atrás» te devuelva)
+  function drill(view, setup) { pushNav(); if (setup) setup(); go(view, true); }
+  function handleBack() {
+    Charts.hideTip();
+    if (!$("#sheet").hidden) { hideSheet(); return true; }
+    const e = Nav.stack.pop();
+    if (e) { restoreNav(e); return true; }
+    if (S.model && S.view !== "inicio" && !$("#tabbar").hidden) { go("inicio"); return true; }
+    return false;
+  }
+  window.addEventListener("popstate", () => {
+    if (!Nav.armed) return;
+    if (handleBack()) { history.pushState({ fin: "guard" }, ""); return; }
+    // En Inicio sin nada abierto: la siguiente pulsación sale de la app
+    if (Date.now() - Nav.exitAt > 2500) { Nav.exitAt = Date.now(); toast("Pulsa atrás otra vez para salir"); }
+  });
   function openSheet(title, body) {
     $("#sheetTitle").textContent = title;
     const b = $("#sheetBody"); b.innerHTML = ""; b.appendChild(body);
     $("#sheet").hidden = false; document.body.style.overflow = "hidden"; document.body.classList.add("sheet-open");
-    history.pushState({ sheet: 1 }, "");
+    armBack();
   }
-  function closeSheet() {
-    if ($("#sheet").hidden) return;
-    $("#sheet").hidden = true; document.body.style.overflow = ""; document.body.classList.remove("sheet-open");
-    if (history.state && history.state.sheet) history.back();
-  }
-  window.addEventListener("popstate", () => { if (!$("#sheet").hidden) { $("#sheet").hidden = true; document.body.style.overflow = ""; document.body.classList.remove("sheet-open"); } });
+  function hideSheet() { $("#sheet").hidden = true; document.body.style.overflow = ""; document.body.classList.remove("sheet-open"); }
+  function closeSheet() { if (!$("#sheet").hidden) hideSheet(); }
 
   // ── Login, selección de archivo y ajustes ────────────────
   function showLogin() {
@@ -1602,7 +1653,7 @@
         <p class="xsmall muted">Dirección de redirección: <code>${esc(Auth.redirectUri())}</code></p>
         <button class="btn secondary" id="sSaveC" type="button">Guardar</button></details>
       <button class="btn danger" id="sOut" type="button">${S.mode === "demo" ? "Salir del modo demo" : "Cerrar sesión"}</button>
-      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.8</p>`;
+      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.9</p>`;
     $("#sTheme", body).value = st.theme || "auto";
     $("#sAsk", body).onchange = e => saveSettings({ askSavings: e.target.checked });
     $("#sAuto", body).onchange = e => saveSettings({ autoSnap: e.target.checked });
