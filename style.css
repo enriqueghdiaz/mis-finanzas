@@ -296,3 +296,96 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 5px; font-
 @keyframes spin { to { transform: rotate(360deg); } }
 .goal { padding: 12px 0; border-bottom: 1px solid var(--border); }
 .goal:last-child { border-bottom: 0; }
+
+/* ── v1.4: contador, desglose, planificar, filtros ── */
+.link { font-size: 13px; color: var(--brand); background: none; border: 0; padding: 0; cursor: pointer; }
+.counter .counter-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; }
+.counter .label { font-size: 13px; color: var(--text-2); }
+.counter .big { font-size: 28px; font-weight: 750; letter-spacing: -.02em; }
+.counter.free .big { color: var(--pos); }
+.counter.over .big { color: var(--neg); }
+.counter.ok .big { color: var(--text); }
+.counter-help { color: var(--text-3); text-align: right; max-width: 45%; }
+.stackbar { display: flex; height: 10px; border-radius: 99px; background: var(--brand-soft); overflow: hidden; margin: 10px 0 8px; gap: 2px; }
+.counter.over .stackbar { background: var(--neg-soft); }
+.stackbar span { display: block; height: 100%; }
+.stackbar span:first-child { border-radius: 99px 0 0 99px; }
+.counter-lines { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.counter-lines div { display: flex; justify-content: space-between; gap: 8px; color: var(--text-2); }
+.counter-lines b { color: var(--text); font-weight: 600; white-space: nowrap; }
+.counter-lines small { font-size: 11px; color: var(--text-3); }
+.counter-lines small.pos { color: var(--pos); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+#mCounter .counter { background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px; padding: 12px; }
+.counter-pill {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%;
+  border: 1px solid var(--border); background: var(--surface); border-radius: 14px; padding: 12px 14px;
+  font-size: 14px; cursor: pointer; text-align: left; box-shadow: var(--shadow);
+}
+.counter-pill b { white-space: nowrap; }
+.counter-pill.free b { color: var(--pos); }
+.counter-pill.over { background: var(--neg-soft); }
+.counter-pill.over b { color: var(--neg); }
+.brow-sub { font-size: 12px; color: var(--text-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note-ico { font-size: 12px; }
+
+.mini-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px; }
+.mini-kpis div { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+.mini-kpis span { display: block; font-size: 11px; color: var(--text-2); }
+.mini-kpis b { font-size: 14px; }
+.dline { border: 1px solid var(--border); border-radius: 12px; padding: 8px; margin-bottom: 8px; background: var(--surface-2); }
+.dline-top { display: flex; align-items: center; gap: 8px; }
+.dline .expr { flex: 1; min-width: 0; font-size: 18px; font-weight: 650; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); outline: none; }
+.dline .expr:focus, .dline .lbl:focus { border-color: var(--brand); }
+.dline .eq { font-size: 13px; color: var(--text-2); white-space: nowrap; }
+.dline .lbl { width: 100%; margin-top: 6px; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); font-size: 13px; outline: none; }
+.dline .del { width: 32px; height: 32px; }
+.eq.neg { color: var(--neg); }
+.opbar { display: flex; gap: 6px; margin: 4px 0 10px; }
+.opk { flex: 1; min-width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); font-size: 18px; font-weight: 600; cursor: pointer; }
+.opk.wide { flex: 2.2; font-size: 14px; color: var(--brand); }
+.opk:active { background: var(--brand-soft); }
+.total-row { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 2px 14px; font-size: 15px; }
+.total-row b { font-size: 20px; }
+.field textarea { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); outline: none; resize: vertical; font: inherit; }
+.budget-edit { width: 120px; }
+
+.tips { display: flex; flex-direction: column; gap: 8px; }
+.tip { display: flex; gap: 10px; font-size: 13.5px; line-height: 1.45; padding: 10px; border-radius: 12px; background: var(--surface-2); }
+.tip-ico { flex: none; font-size: 16px; }
+.refs { display: flex; flex-direction: column; }
+.ref-row {
+  display: grid; grid-template-columns: 1fr auto 84px; align-items: center; gap: 10px; width: 100%;
+  background: none; border: 0; border-bottom: 1px solid var(--border); padding: 9px 0; text-align: left; cursor: pointer;
+}
+.ref-row:last-child { border-bottom: 0; }
+.ref-name { font-size: 14px; font-weight: 550; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ref-vals { display: flex; flex-direction: column; align-items: flex-end; font-size: 13px; }
+.ref-vals small { font-size: 11px; color: var(--text-2); }
+.spark { width: 84px; height: 26px; }
+
+.filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.filters select {
+  width: 100%; padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface);
+  font-size: 13px; min-width: 0;
+}
+.filters select:last-child { grid-column: 1 / -1; }
+.mov-sum { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; color: var(--text-2); padding: 0 2px; }
+
+/* ── v1.5: contador fijo en Presupuesto e insignia en la pestaña ── */
+.counter-sticky { position: sticky; top: var(--topbar-h, 58px); z-index: 15; padding: 12px 14px 8px; }
+.counter-sticky .counter .big { font-size: 24px; }
+.counter-sticky .counter-help { display: none; }
+.counter-sticky .counter-lines, .counter-sticky .counter-save { display: none; }
+.counter-sticky.open .counter-lines { display: flex; }
+.counter-sticky.open .counter-save { display: block; }
+.counter-sticky .stackbar { margin: 8px 0 6px; }
+.counter-toggle { display: block; margin: 2px auto 0; background: none; border: 0; color: var(--text-3); font-size: 12px; cursor: pointer; padding: 2px 8px; }
+.counter-save { margin-top: 8px; text-align: left; font-size: 13px; line-height: 1.35; }
+.tab { position: relative; }
+.tab-badge {
+  position: absolute; top: 0; left: 50%; margin-left: 8px; font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 3px 5px; border-radius: 99px; background: var(--pos); color: #fff; border: 2px solid var(--surface); white-space: nowrap;
+}
+.tab-badge.over { background: var(--neg); }
+body.sheet-open .toast { bottom: auto; top: calc(14px + env(safe-area-inset-top, 0px)); }
