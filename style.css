@@ -372,20 +372,13 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 5px; font-
 .filters select:last-child { grid-column: 1 / -1; }
 .mov-sum { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; color: var(--text-2); padding: 0 2px; }
 
-/* ── v1.5: contador fijo en Presupuesto e insignia en la pestaña ── */
-.counter-sticky { position: sticky; top: var(--topbar-h, 58px); z-index: 15; padding: 12px 14px 8px; }
-.counter-sticky .counter .big { font-size: 24px; }
-.counter-sticky .counter-help { display: none; }
-.counter-sticky .counter-lines, .counter-sticky .counter-save { display: none; }
-.counter-sticky.open .counter-lines { display: flex; }
-.counter-sticky.open .counter-save { display: block; }
-.counter-sticky .stackbar { margin: 8px 0 6px; }
-.counter-toggle { display: block; margin: 2px auto 0; background: none; border: 0; color: var(--text-3); font-size: 12px; cursor: pointer; padding: 2px 8px; }
+/* ── v1.6: contador (no fijo) con pendiente de gastar ── */
+.counter-card { padding: 14px 14px 8px; }
+.counter-card .counter-lines, .counter-card .counter-save { display: none; }
+.counter-card.open .counter-lines { display: flex; }
+.counter-card.open .counter-save { display: block; }
+.counter-toggle { display: block; margin: 4px auto 0; background: none; border: 0; color: var(--text-3); font-size: 12px; cursor: pointer; padding: 2px 8px; }
 .counter-save { margin-top: 8px; text-align: left; font-size: 13px; line-height: 1.35; }
-.tab { position: relative; }
-.tab-badge {
-  position: absolute; top: 0; left: 50%; margin-left: 8px; font-size: 10px; font-weight: 700; line-height: 1;
-  padding: 3px 5px; border-radius: 99px; background: var(--pos); color: #fff; border: 2px solid var(--surface); white-space: nowrap;
-}
-.tab-badge.over { background: var(--neg); }
+.counter .pend { text-align: right; }
+.counter .pend-num { font-size: 20px; font-weight: 700; color: var(--text); }
 body.sheet-open .toast { bottom: auto; top: calc(14px + env(safe-area-inset-top, 0px)); }

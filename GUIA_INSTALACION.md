@@ -72,3 +72,20 @@ Los importes reales del mes se calculan igual que tu hoja P&G: suma por categor�
 - **Presupuesto con fórmula** (p. ej. `=8.25+144.09`): si lo editas desde la app, se sustituye por el importe final. La app te avisa antes.
 - **Meses nuevos (2027):** si añades columnas de mes en `PPTO` (con la fecha en la cabecera, como ahora), la app las detecta sola. `BCE` lee de junio a diciembre; para 2027 dime cómo vas a organizar el balance y adapto el rango.
 - **Privacidad:** el inicio de sesión guarda los tokens solo en tu móvil. La app pide únicamente permiso para tus archivos (`Files.ReadWrite`) y tu nombre (`User.Read`). Puedes revocarlo en account.live.com/consent/Manage.
+
+---
+
+## Novedades v1.4
+
+- **Partidas con cálculos:** al editar una partida puedes escribir `8,25 + 144,09 − 30` (usa la barra **+ − ( )** sobre el teclado). Se guarda en PPTO como fórmula (`=8.25+144.09-30`), igual que hacías a mano. Tus fórmulas antiguas se abren como líneas.
+- **Desglose y recordatorios:** cada línea puede llevar un concepto («Seguro hogar», «Seguro moto»…) y la partida una nota. Se guardan en una hoja nueva del Excel, **App_Notas**, que la app crea sola. Las partidas con notas llevan 📝.
+- **Contador «Por asignar»:** ingresos − ahorro − gastos presupuestados del mes. Si entran ingresos que no estaban previstos, el contador sube con todo el importe.
+- **Planificar** (pestaña dentro de Presupuesto): consejos según tus últimos meses, referencia por partida (lo gastado en los últimos meses frente a lo presupuestado), dónde fallaba el presupuesto, fijos frente a variables, y «Preparar mes con tus medias».
+- **Editar mes completo:** rellena con el presupuesto del mes anterior, con tu media real o con lo real del último mes, y ves el contador moverse mientras escribes. Las partidas con desglose se respetan.
+- **Movimientos:** filtra por categoría y mes, ordena por fecha, importe o concepto, busca por concepto o importe exacto (p. ej. `46,95`), y ve el total de lo filtrado. Desde Análisis, al tocar una barra de «Real vs presupuesto» se abren sus movimientos.
+
+## Novedades v1.5 y v1.6
+
+- **Contador en Presupuesto:** arriba del todo ves **«Por asignar»** (ingresos − ahorro − gastos presupuestados) y, a su lado, **«Pendiente de gastar»**: lo que te queda de cada partida sumado (lo que te pasas en una no resta de las demás; se muestra aparte como exceso). «Ver detalle» despliega el cálculo. El contador se desplaza con la página y no aparece en la barra de abajo.
+- **El ahorro de los ingresos extra no se separa solo.** Al registrar un ingreso que supera lo previsto, la app te pregunta: apartar tu porcentaje, otra cantidad o nada. Si apartas algo, se crea un movimiento de Ahorro con la nota «Ahorro extra», y el contador lo descuenta. Puedes desactivar la pregunta en ⚙️ Ajustes.
+- **Actualizaciones:** a partir de ahora cada paquete trae todos los archivos de la app (menos `config.js`, para no borrar tu Client ID). Súbelos todos. Si falta alguno, la app te avisa con «Actualización incompleta».
