@@ -43,6 +43,11 @@
   // ── Arranque ──────────────────────────────────────────────
   async function start() {
     applyTheme();
+    if (!Excel.Expr || !Excel.noteKey || !Charts.sparkbars || !Charts.diverging) {
+      document.getElementById("main").innerHTML = `<div class="alert err" style="margin-top:10px"><span class="i">!</span><div><b>Actualización incompleta.</b><br>
+        Faltan archivos de la versión nueva en GitHub. Sube <b>todos</b> los archivos del paquete de actualización (carpeta <code>js</code> completa, <code>style.css</code> y <code>sw.js</code>) y vuelve a abrir la app.</div></div>`;
+      return;
+    }
     if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
     bindChrome();
     try { await Auth.handleRedirect(); } catch (e) { toast("Inicio de sesión: " + e.message, 5000); }
@@ -205,7 +210,7 @@
     $$(".view").forEach(v => v.hidden = v.id !== "view-" + S.view);
     const v = $("#view-" + S.view);
     ({ inicio: renderInicio, movimientos: renderMovs, presupuesto: renderBudget, analisis: renderAnalisis, patrimonio: renderPatrimonio })[S.view](v);
-    updateTabBadge();
+    $$(".tab-badge").forEach(x => x.remove());
     if (S.pendingNew) { S.pendingNew = false; setTimeout(() => openTxForm(), 200); }
   }
 
@@ -477,7 +482,13 @@
     const aho = Math.max(ahoPlan, ahoReal - ahoExtra) + ahoExtra;
     const gasPres = b.items.filter(i => i.tipo === "Gasto").reduce((a, i) => a + val(i), 0);
     const gasReal = txOfMonth(k).filter(t => t.tipo === "Gasto").reduce((a, t) => a + t.importe, 0);
-    return { ingPlan, ingCons, extra, rate, byRate, ahoPlan, ahoExtra, ahoReal, aho, gasPres, gasReal, libre: ingCons - aho - gasPres };
+    // Lo que queda por gastar de lo presupuestado (partida a partida; lo que te pasas no resta de otras)
+    let pend = 0, exceso = 0, nPend = 0;
+    b.items.filter(i => i.tipo === "Gasto").forEach(i => {
+      const d = val(i) - realCat(k, i.cat);
+      if (d > 0.004) { pend += d; nPend++; } else if (d < -0.004) exceso -= d;
+    });
+    return { pend, exceso, nPend, ingPlan, ingCons, extra, rate, byRate, ahoPlan, ahoExtra, ahoReal, aho, gasPres, gasReal, libre: ingCons - aho - gasPres };
   }
   function counterHTML(c, k, compact) {
     if (!c) return "";
@@ -487,7 +498,8 @@
     return `<div class="counter ${done ? "ok" : L > 0 ? "free" : "over"}">
       <div class="counter-top"><div><div class="label">${head} · ${esc(MES[+k.split("-")[1] - 1])}</div>
         <div class="big num">${done ? eur(0) : (L > 0 ? "" : "−") + eur(Math.abs(L))}</div></div>
-        ${compact ? "" : `<div class="xsmall counter-help">Ingresos − ahorro − gastos presupuestados</div>`}</div>
+        ${compact ? "" : `<div class="pend"><div class="label">Pendiente de gastar</div><div class="pend-num num">${eur(c.pend)}</div>
+          ${c.exceso > 0.004 ? `<div class="xsmall neg">${eur(c.exceso)} de exceso</div>` : `<div class="xsmall muted">en ${c.nPend} partida${c.nPend === 1 ? "" : "s"}</div>`}</div>`}</div>
       <div class="stackbar"><span style="width:${pct(c.aho)}%;background:var(--s1)"></span><span style="width:${pct(c.gasPres)}%;background:var(--s2)"></span></div>
       <div class="counter-lines">
         <div><span>Ingresos${c.extra > 0.004 ? ` <small class="pos">(+${eur(c.extra)} extra)</small>` : ""}</span><b class="num">${eur(c.ingCons)}</b></div>
@@ -522,17 +534,6 @@
     $("#aNo", body).onclick = () => done(0);
     openSheet("¿Apartas algo para ahorro?", body);
   }
-  function updateTabBadge() {
-    const tabB = $('.tab[data-view="presupuesto"]'); if (!tabB || !S.model) return;
-    let bdg = $(".tab-badge", tabB);
-    const c = counter(nowMonth());
-    if (!c || Math.abs(c.libre) < 1) { if (bdg) bdg.remove(); return; }
-    if (!bdg) { bdg = document.createElement("span"); bdg.className = "tab-badge num"; tabB.appendChild(bdg); }
-    bdg.className = "tab-badge num " + (c.libre > 0 ? "free" : "over");
-    bdg.textContent = (c.libre > 0 ? "" : "−") + Charts.eurShort(Math.abs(c.libre)) + "€";
-    bdg.title = (c.libre > 0 ? "Por asignar: " : "Asignado de más: ") + eur(Math.abs(c.libre));
-  }
-
   function budgetRows(k, tipo) {
     const b = S.model.budget, inB = b.months.some(m => m.key === k);
     const real = sumBy(txOfMonth(k).filter(t => t.tipo === tipo), t => t.cat);
@@ -548,13 +549,12 @@
     v.appendChild(monthSwitch(months, render));
     const cObj = counter(k);
     if (cObj) {
-      const cnt = document.createElement("div"); cnt.className = "card counter-sticky" + (settings().counterOpen ? " open" : "");
+      const cnt = document.createElement("div"); cnt.className = "card counter-card" + (settings().counterOpen ? " open" : "");
       cnt.innerHTML = counterHTML(cObj, k) + `<button type="button" class="counter-toggle" aria-label="Ver detalle">${settings().counterOpen ? "Ocultar detalle ▴" : "Ver detalle ▾"}</button>`;
       $(".counter-toggle", cnt).onclick = () => { saveSettings({ counterOpen: !settings().counterOpen }); render(); };
       const sv = $(".counter-save", cnt);
       if (sv) sv.onclick = () => askSavings({ extra: +sv.dataset.extra, fecha: k === nowMonth() ? todayISO() : k + "-01", origen: "ingresos extra de " + MES[+k.split("-")[1] - 1] });
       v.appendChild(cnt);
-      document.documentElement.style.setProperty("--topbar-h", $(".topbar").offsetHeight + "px");
     }
     const seg = document.createElement("div"); seg.className = "seg";
     seg.innerHTML = [["Gasto", "Gastos"], ["Ingreso", "Ingresos"], ["Plan", "Planificar"]].map(([s, l]) => `<button type="button" class="${tipo === s ? "on" : ""}" data-s="${s}">${l}</button>`).join("");
@@ -567,7 +567,7 @@
     const sum = document.createElement("div"); sum.className = "kpis";
     sum.innerHTML = `<div class="kpi"><span>Presupuestado</span><b class="num">${eur(tb)}</b></div>
       <div class="kpi"><span>${tipo === "Gasto" ? "Gastado" : "Recibido"}</span><b class="num">${eur(tr)}</b>
-      <small class="${tipo === "Gasto" ? (tr > tb ? "neg" : "pos") : (tr >= tb ? "pos" : "muted")}">${tipo === "Gasto" ? (tr > tb ? "Exceso " + eur(tr - tb) : "Quedan " + eur(tb - tr)) : (tr >= tb ? "Objetivo cumplido" : "Faltan " + eur(tb - tr))}</small></div>`;
+      <small class="${tipo === "Gasto" ? (tr > tb ? "neg" : "pos") : (tr >= tb ? "pos" : "muted")}">${tipo === "Gasto" ? (cObj ? `Pendiente ${eur(cObj.pend)}${cObj.exceso > 0.004 ? ` <span class="neg">· exceso ${eur(cObj.exceso)}</span>` : ""}` : (tr > tb ? "Exceso " + eur(tr - tb) : "Quedan " + eur(tb - tr))) : (tr >= tb ? "Objetivo cumplido" : "Faltan " + eur(tb - tr))}</small></div>`;
     v.appendChild(sum);
 
     const card = document.createElement("div"); card.className = "card";
@@ -1285,7 +1285,7 @@
         <p class="xsmall muted">Dirección de redirección: <code>${esc(Auth.redirectUri())}</code></p>
         <button class="btn secondary" id="sSaveC" type="button">Guardar</button></details>
       <button class="btn danger" id="sOut" type="button">${S.mode === "demo" ? "Salir del modo demo" : "Cerrar sesión"}</button>
-      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.5</p>`;
+      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.6</p>`;
     $("#sTheme", body).value = st.theme || "auto";
     $("#sAsk", body).onchange = e => saveSettings({ askSavings: e.target.checked });
     $("#sTheme", body).onchange = e => { saveSettings({ theme: e.target.value }); applyTheme(); render(); };

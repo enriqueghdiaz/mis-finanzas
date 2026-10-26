@@ -24,6 +24,82 @@
   }
   const num = v => (typeof v === "number" && isFinite(v)) ? v : (v === "" || v == null ? 0 : (isFinite(+v) ? +v : 0));
 
+  // ── Calculadora: "8,25 + 144,09 − 30" ⇄ "=8.25+144.09-30" ──
+  const Expr = (function () {
+    function normNum(t) {
+      if (t.includes(",")) return t.replace(/\./g, "").replace(",", ".");
+      if (/^\d{1,3}(\.\d{3})+$/.test(t)) return t.replace(/\./g, "");
+      return t;
+    }
+    function tokenize(str) {
+      const s = String(str).replace(/[−–]/g, "-").replace(/[×x]/gi, "*").replace(/÷/g, "/").replace(/€/g, "").replace(/\s+/g, "");
+      const toks = []; let i = 0;
+      while (i < s.length) {
+        const ch = s[i];
+        if ("+-*/()".includes(ch)) { toks.push(ch); i++; continue; }
+        const m = /^[\d.,]+/.exec(s.slice(i));
+        if (!m) throw new Error("Carácter no válido: " + ch);
+        const n = parseFloat(normNum(m[0]));
+        if (!isFinite(n)) throw new Error("Número no válido: " + m[0]);
+        toks.push(n); i += m[0].length;
+      }
+      return toks;
+    }
+    function evaluate(str) {
+      const toks = tokenize(str); let pos = 0;
+      if (!toks.length) return 0;
+      const peek = () => toks[pos], next = () => toks[pos++];
+      function expr() { let v = term(); while (peek() === "+" || peek() === "-") { const op = next(); const r = term(); v = op === "+" ? v + r : v - r; } return v; }
+      function term() { let v = factor(); while (peek() === "*" || peek() === "/") { const op = next(); const r = factor(); v = op === "*" ? v * r : v / r; } return v; }
+      function factor() {
+        const t = next();
+        if (t === "-") return -factor();
+        if (t === "+") return factor();
+        if (t === "(") { const v = expr(); if (next() !== ")") throw new Error("Falta un paréntesis"); return v; }
+        if (typeof t === "number") return t;
+        throw new Error("Expresión incompleta");
+      }
+      const v = expr();
+      if (pos < toks.length) throw new Error("Expresión no válida");
+      if (!isFinite(v)) throw new Error("Resultado no válido");
+      return Math.round(v * 100) / 100;
+    }
+    function tryEval(str) { try { return { ok: true, value: evaluate(str) }; } catch (e) { return { ok: false, error: e.message }; } }
+    function isPlainNumber(str) { const t = tokenize(str); return t.length === 1 && typeof t[0] === "number" || (t.length === 2 && t[0] === "-" && typeof t[1] === "number"); }
+    // Expresión del usuario → contenido de celda (número o fórmula con punto decimal)
+    function toCell(str) {
+      const toks = tokenize(str);
+      if (!toks.length) return 0;
+      if (isPlainNumber(str)) return evaluate(str);
+      const f = toks.map(t => typeof t === "number" ? String(t) : t).join("");
+      return "=" + f.replace(/^\+/, "");
+    }
+    // Fórmula de celda solo con números (=8.25+144.09) → "8,25 + 144,09"; si no, null
+    function fromFormula(f) {
+      if (typeof f === "number") return fmt(f);
+      if (typeof f !== "string" || f[0] !== "=") return null;
+      const body = f.slice(1).replace(/\s+/g, "");
+      if (!/^[+\-]?[\d.+\-*/()]+$/.test(body)) return null;
+      return body.replace(/^\+/, "").replace(/\d+(\.\d+)?/g, n => n.replace(".", ",")).replace(/([+\-*/])/g, " $1 ").replace(/\s+/g, " ").replace(/^ - /, "-").trim();
+    }
+    // Divide en sumandos de primer nivel: "8,25 + 144,09 - 30" → ["8,25", "144,09", "-30"]
+    function splitTerms(expr) {
+      const out = []; let depth = 0, cur = "";
+      const s = String(expr).replace(/[−–]/g, "-");
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (ch === "(") depth++;
+        if (ch === ")") depth--;
+        if (depth === 0 && (ch === "+" || ch === "-") && cur.trim() && !/[*/(]\s*$/.test(cur)) { out.push(cur.trim()); cur = ch === "-" ? "-" : ""; continue; }
+        cur += ch;
+      }
+      if (cur.trim()) out.push(cur.trim());
+      return out.map(t => t.replace(/^-\s+/, "-"));
+    }
+    function fmt(n) { return String(Math.round(n * 100) / 100).replace(".", ","); }
+    return { evaluate, tryEval, toCell, fromFormula, splitTerms, fmt, isPlainNumber };
+  })();
+
   // ── Estructura de categorías (hoja Registro) ──────────────
   const CATS = [
     { tipo: "Ingreso", nat: "NA", per: "Fijo", cats: ["Nómina", "Dietas"] },
@@ -92,6 +168,7 @@
       return { values: j.values, formulas: j.formulas };
     }
     async writeRange(sheet, addr, data) { await this.req("PATCH", `${this.ws(sheet)}/range(address='${addr}')`, data); }
+    async addSheet(name) { await this.req("POST", "/worksheets/add", { name }); }
     tbl(name) { return `/tables('${encodeURIComponent(name)}')`; }
     async readTable(name) { const j = await this.req("GET", `${this.tbl(name)}/range?$select=values`); return j.values; }
     async addTableRow(name, index, row) { await this.req("POST", `${this.tbl(name)}/rows/add`, { index, values: [row] }); }
@@ -133,7 +210,9 @@
   }
 
   // ── Lectura de todo el libro ───────────────────────────────
-  const RANGES = { budget: "B6:AN50", balance: "B8:R31", invest: "B2:F21" };
+  const RANGES = { budget: "B6:AN50", balance: "B8:R31", invest: "B2:F21", notes: "A1:F600" };
+  const NOTES_HEAD = ["Clave", "Mes", "Categoría", "Nota", "Desglose", "Actualizado"];
+  const notesSheet = () => (window.APP_CONFIG.SHEETS.notes = window.APP_CONFIG.SHEETS.notes || "App_Notas");
 
   // Comprueba paso a paso el archivo para dar un error claro si algo no cuadra
   async function diagnose(p) {
@@ -164,17 +243,21 @@
       const tbl = tables.find(t => t.toLowerCase() === S.txTable.toLowerCase());
       if (!tbl) throw new Error(`En «${d.item.name}» no encuentro la tabla «${S.txTable}» (la de los movimientos). Tablas que hay: ${tables.join(", ") || "ninguna"}. ¿Es la versión correcta del archivo?`);
       S.txTable = tbl;
+      notesSheet();
+      const nh = sheets.find(n => n.toLowerCase() === S.notes.toLowerCase()); if (nh) S.notes = nh;
       ["budget", "balance", "invest"].forEach(k => {
         const hit = sheets.find(n => n.trim().toLowerCase() === S[k].trim().toLowerCase());
         if (hit) S[k] = hit; else warnings.push(S[k]);
       });
       if (warnings.includes(S.budget)) throw new Error(`En «${d.item.name}» no encuentro la hoja «${S.budget}». Hojas que hay: ${sheets.join(", ")}.`);
     }
+    notesSheet();
     const opt = (k, rng) => (sheets && !sheets.includes(S[k])) ? Promise.resolve(null) : p.readRange(S[k], rng).catch(e => { warnings.push(S[k] + ": " + e.message); return null; });
     const tx = await p.readTable(S.txTable).catch(e => { throw new Error(`Leyendo la tabla «${S.txTable}»: ${e.message}`); });
     const budget = await p.readRange(S.budget, RANGES.budget).catch(e => { throw new Error(`Leyendo la hoja «${S.budget}» (${RANGES.budget}): ${e.message}`); });
     const [balance, invest] = await Promise.all([opt("balance", RANGES.balance), opt("invest", RANGES.invest)]);
-    return { tx, budget, balance, invest, warnings, loadedAt: new Date().toISOString() };
+    const notes = (sheets && !sheets.includes(S.notes)) ? null : await p.readRange(S.notes, RANGES.notes).catch(() => null);
+    return { tx, budget, balance, invest, notes, warnings, loadedAt: new Date().toISOString() };
   }
 
   // ── Traducción a modelo ────────────────────────────────────
@@ -247,8 +330,8 @@
       const inIncome = i < gi;
       if (inIncome && typeof r[0] === "number" && r[0] > 0 && r[0] < 1) { rate = { value: r[0], addr: "B" + (R0 + i) }; return; }
       if (inIncome && label === "Ahorro") {
-        savings = { row: R0 + i, vals: {} };
-        months.forEach(m => savings.vals[m.key] = num(r[m.j]));
+        savings = { row: R0 + i, vals: {}, f: {} };
+        months.forEach(m => { savings.vals[m.key] = num(r[m.j]); savings.f[m.key] = F[i][m.j]; });
         return;
       }
       const list = inIncome ? INCOME_CATS : EXPENSE_CATS;
@@ -330,6 +413,19 @@
     return rows;
   }
 
+  function parseNotes(raw) {
+    const out = {};
+    if (!raw || !raw.values) return out;
+    raw.values.forEach((r, i) => {
+      if (i === 0 || !r[0]) return;
+      let des = [];
+      try { des = r[4] ? JSON.parse(r[4]) : []; } catch (e) { des = []; }
+      out[String(r[0])] = { mes: String(r[1] || ""), cat: String(r[2] || ""), nota: String(r[3] || ""), desglose: Array.isArray(des) ? des : [], row: i + 1 };
+    });
+    return out;
+  }
+  const noteKey = (mes, cat) => `${mes}|${cat}`;
+
   function build(raw) {
     const tx = parseTx(raw.tx);
     const budget = parseBudget(raw.budget);
@@ -338,6 +434,7 @@
       tx, budget,
       balance: raw.balance ? parseBalance(raw.balance, year) : { months: [], sections: [] },
       warnings: raw.warnings || [],
+      notes: parseNotes(raw.notes),
       invest: parseInvest(raw.invest),
       loadedAt: raw.loadedAt
     };
@@ -372,7 +469,7 @@
       for (const c of Object.keys(byCol)) {
         const cells = byCol[c];
         if (cells.length === 1) {
-          await p.writeRange(S, colLetter(+c) + cells[0].row, { values: [[cells[0].value]] });
+          await p.writeRange(S, colLetter(+c) + cells[0].row, { formulas: [[cells[0].value]] });
           continue;
         }
         const r1 = Math.min(...cells.map(x => x.row)), r2 = Math.max(...cells.map(x => x.row));
@@ -385,6 +482,27 @@
     async setBalance(p, model, d) { // d.cells: [{addr, value}]
       const S = window.APP_CONFIG.SHEETS.balance;
       for (const c of d.cells) await p.writeRange(S, c.addr, { values: [[c.value === null ? "" : c.value]] });
+    },
+    async setNotes(p, model, d) { // d.notes: [{mes, cat, nota, desglose}]
+      const S = notesSheet();
+      let cur;
+      try { cur = await p.readRange(S, RANGES.notes); }
+      catch (e) {
+        if (!p.addSheet) throw e;
+        await p.addSheet(S);
+        cur = { values: [] };
+      }
+      const vals = cur.values || [];
+      if (!vals.length || String(vals[0][0] || "") !== "Clave") await p.writeRange(S, "A1:F1", { values: [NOTES_HEAD] });
+      const keys = vals.map(r => String(r[0] || ""));
+      let nextFree = Math.max(2, keys.reduce((last, k, i) => k ? i + 1 : last, 1) + 1);
+      for (const n of d.notes) {
+        const key = noteKey(n.mes, n.cat);
+        let row = keys.indexOf(key) + 1;
+        if (row < 2) { row = nextFree++; keys[row - 1] = key; }
+        const des = (n.desglose || []).filter(x => x && (x.e || x.l));
+        await p.writeRange(S, `A${row}:F${row}`, { values: [[key, n.mes, n.cat, n.nota || "", des.length ? JSON.stringify(des) : "", new Date().toISOString().slice(0, 16).replace("T", " ")]] });
+      }
     },
     async setInvestAmount(p, model, d) {
       await p.writeRange(window.APP_CONFIG.SHEETS.invest, "C2", { values: [[d.value]] });
@@ -409,8 +527,9 @@
         const m = model.budget.months.find(m => colNumber(m.col) === a.c1);
         if (!m) return;
         const it = model.budget.items.find(i => i.row === a.r1);
-        if (it) it.vals[m.key] = c.value;
-        if (model.budget.savings && model.budget.savings.row === a.r1) model.budget.savings.vals[m.key] = c.value;
+        const val = typeof c.value === "string" ? (Expr.tryEval(c.value.replace(/^=/, "")).value || 0) : c.value;
+        if (it) { it.vals[m.key] = val; it.f[m.key] = c.value; }
+        if (model.budget.savings && model.budget.savings.row === a.r1) { model.budget.savings.vals[m.key] = val; model.budget.savings.f[m.key] = c.value; }
       });
     } else if (op.type === "setBalance") {
       d.cells.forEach(c => {
@@ -421,13 +540,16 @@
           else { const x = model.balance.months.findIndex(m => m.col === colLetter(a.c1)); if (x >= 0) it.vals[x] = c.value; }
         }));
       });
+    } else if (op.type === "setNotes") {
+      model.notes = model.notes || {};
+      d.notes.forEach(n => { model.notes[noteKey(n.mes, n.cat)] = { mes: n.mes, cat: n.cat, nota: n.nota || "", desglose: (n.desglose || []).filter(x => x && (x.e || x.l)) }; });
     } else if (op.type === "setInvestAmount" && model.invest) {
       model.invest.amount = d.value;
     }
   }
 
   window.Excel = {
-    GraphProvider, loadRaw, build, ops, applyLocal, investSplit, txToRow,
+    GraphProvider, loadRaw, build, ops, applyLocal, investSplit, txToRow, Expr, noteKey,
     CATS, CAT_INFO, SAVING, INCOME_CATS, EXPENSE_CATS, MESES,
     serialToISO, isoToSerial, colLetter, colNumber, parseAddr, sameTx
   };

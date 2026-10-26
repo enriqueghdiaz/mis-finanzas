@@ -157,6 +157,8 @@
       }
       const v = el("text", { x: w, y: y + 17, "text-anchor": "end", style: "fill:var(--text);font-weight:600" }, s); v.textContent = eurShort(r.real) + " €";
       const hit = el("rect", { x: 0, y, width: w, height: rowH, fill: "transparent" }, s);
+      if (r.onClick) hit.addEventListener("click", r.onClick);
+      hit.style.cursor = "pointer";
       hit.addEventListener("pointerdown", e => showTip(`<b>${r.label}</b>Real: ${eur(r.real)}${r.budget != null ? `<br>Presupuesto: ${eur(r.budget)}<br>${over ? "Exceso: " + eur(r.real - r.budget) : "Disponible: " + eur(r.budget - r.real)}` : ""}`, e.clientX, e.clientY));
     });
   }
@@ -204,5 +206,49 @@
     if (series.length > 1 && opts.legend !== false) legend(container, series);
   }
 
-  window.Charts = { fmtNum, donut, stackedBars, bullet, line, SERIES, eur, eurShort, hideTip };
+
+  // ── Mini barras (sparkline) en línea: últimos meses + raya de presupuesto ──
+  function sparkbars(values, budget, opts = {}) {
+    const w = opts.width || 84, h = opts.height || 26, n = values.length || 1, gap = 3;
+    const maxV = Math.max(1, ...values.map(v => v || 0), budget || 0);
+    const bw = (w - gap * (n - 1)) / n;
+    let out = `<svg class="chart spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">`;
+    values.forEach((v, i) => {
+      const bh = Math.max(v > 0 ? 2 : 0, (h - 2) * (v || 0) / maxV);
+      const x = i * (bw + gap), last = i === n - 1;
+      out += `<path d="${roundedTopRect(x, h - bh, bw, bh, 2)}" fill="${last ? "var(--s1)" : "var(--muted-mark)"}"/>`;
+    });
+    if (budget) { const y = h - (h - 2) * budget / maxV; out += `<line x1="0" x2="${w}" y1="${y}" y2="${y}" stroke="var(--text)" stroke-width="1.5" stroke-dasharray="3 2"/>`; }
+    if (!values.some(v => v > 0)) out += `<line x1="0" x2="${w}" y1="${h - 0.5}" y2="${h - 0.5}" stroke="var(--grid)"/>`;
+    return out + "</svg>";
+  }
+
+  // ── Barras divergentes: + (rojo, te pasas) / − (azul, te sobra) ──
+  function diverging(container, rows, opts = {}) {
+    const rowH = 28, H = rows.length * rowH + 22;
+    const { s, w } = svg(container, H);
+    const lw = Math.min(112, w * 0.34), rw = 58, iw = w - lw - rw - 6;
+    const maxA = Math.max(1, ...rows.map(r => Math.abs(r.value)));
+    const cx = lw + iw / 2;
+    el("line", { x1: cx, x2: cx, y1: 0, y2: rows.length * rowH, stroke: "var(--text-3)", "stroke-width": 1 }, s);
+    const t1 = el("text", { x: lw, y: H - 4 }, s); t1.textContent = opts.leftLabel || "← te sobra";
+    const t2 = el("text", { x: lw + iw, y: H - 4, "text-anchor": "end" }, s); t2.textContent = opts.rightLabel || "te pasas →";
+    rows.forEach((r, i) => {
+      const y = i * rowH;
+      const lab = el("text", { x: 0, y: y + 17 }, s); lab.textContent = r.label.length > 16 ? r.label.slice(0, 15) + "…" : r.label;
+      const len = (iw / 2) * Math.abs(r.value) / maxA;
+      const pos = r.value > 0;
+      if (len > 0.5) {
+        const d = pos ? roundedRightRect(cx + 1, y + 7, len, 13, 4) : `M${cx - 1},${y + 7}H${cx - 1 - len + 4}Q${cx - 1 - len},${y + 7} ${cx - 1 - len},${y + 11}V${y + 16}Q${cx - 1 - len},${y + 20} ${cx - 1 - len + 4},${y + 20}H${cx - 1}Z`;
+        el("path", { d, fill: pos ? "var(--s8)" : "var(--s1)" }, s);
+      }
+      const v = el("text", { x: w, y: y + 17, "text-anchor": "end", style: "fill:var(--text);font-weight:600" }, s);
+      v.textContent = (r.value > 0 ? "+" : r.value < 0 ? "−" : "") + eurShort(Math.abs(r.value)) + " €";
+      const hit = el("rect", { x: 0, y, width: w, height: rowH, fill: "transparent", style: "cursor:pointer" }, s);
+      hit.addEventListener("pointerdown", e => showTip(`<b>${r.label}</b>${r.tip || ""}`, e.clientX, e.clientY));
+      if (r.onClick) hit.addEventListener("click", r.onClick);
+    });
+  }
+
+  window.Charts = { fmtNum, sparkbars, diverging, donut, stackedBars, bullet, line, SERIES, eur, eurShort, hideTip };
 })();

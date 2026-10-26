@@ -23,7 +23,10 @@
       const g = this.grid(sheet), a = parseAddr(addr), arr = data.values || data.formulas;
       for (let r = a.r1; r <= a.r2; r++) for (let c = a.c1; c <= a.c2; c++) {
         const v = arr[r - a.r1][c - a.c1];
-        if (typeof v === "string" && v[0] === "=") { const old = g[colLetter(c) + r]; g[colLetter(c) + r] = { f: v, v: old && typeof old === "object" ? old.v : 0 }; }
+        if (typeof v === "string" && v[0] === "=") {
+          const old = g[colLetter(c) + r], calc = window.Excel.Expr.tryEval(v.slice(1));
+          g[colLetter(c) + r] = { f: v, v: calc.ok ? calc.value : (old && typeof old === "object" ? old.v : 0) };
+        }
         else g[colLetter(c) + r] = v;
       }
     }
@@ -65,6 +68,13 @@
     sumRow(28, "Variables", "=+SUM(#29:#33)"); sumRow(34, "Prescindibles", "=+#35+#40"); sumRow(35, "Fijos", "=+SUM(#36:#39)");
     sumRow(40, "Variables", "=+SUM(#41:#47)"); sumRow(48, "Totales", "=+#20+#34");
     Object.entries(budgetExp).forEach(([row, [label, v]]) => catRow(+row, label, cols.map(() => v)));
+    // Ejemplos de fórmulas como las de tu Excel
+    P.F26 = { f: "=20+15", v: 35 }; P.G26 = { f: "=20+15", v: 35 }; P.H26 = { f: "=20+15", v: 35 };
+    P.F43 = { f: "=60+45-5", v: 100 };
+    ["F", "G", "H"].forEach(c => P[c + "16"] = { f: `=+${c}15*$B$17`, v: 507.5 });
+    sheets.App_Notas = { A1: "Clave", B1: "Mes", C1: "Categoría", D1: "Nota", E1: "Desglose", F1: "Actualizado",
+      A2: "2026-10|Seguros obligatorios", B2: "2026-10", C2: "Seguros obligatorios", D2: "Revisar renovación en noviembre",
+      E2: JSON.stringify([{ e: "20", l: "Seguro hogar" }, { e: "15", l: "Seguro coche (cuota)" }]), F2: "2026-10-01 10:00" };
 
     // Movimientos ficticios (julio–septiembre)
     const txHead = ["Transacción", "Naturaleza", "Periodicidad", "Categoría", "Fecha", "Importe", "Notas"];
@@ -78,11 +88,11 @@
       ["Gasto", "Prescindible", "Variable", "Caprichos", ["Libro", "Revista"], 1, 5, 20],
       ["Gasto", "Prescindible", "Variable", "Otros", ["Ferretería", "Farmacia"], 1, 8, 30]
     ];
-    ["2026-07", "2026-08", "2026-09"].forEach((m, mi) => {
-      const last = mi === 2 ? 25 : 28;
+    ["2026-07", "2026-08", "2026-09", "2026-10"].forEach((m, mi) => {
+      const last = mi === 3 ? 24 : 28;
       add("Ingreso", "NA", "Fijo", "Nómina", m + "-01", 1850, "Nómina");
       add("Ingreso", "NA", "Fijo", "Dietas", m + "-01", 180, "Tickets comida");
-      add("Gasto", "Esencial", "Fijo", "Ahorro", m + "-01", [520, 508, 522][mi], "Traspaso a inversión");
+      add("Gasto", "Esencial", "Fijo", "Ahorro", m + "-01", [520, 508, 522, 508][mi], "Traspaso a inversión");
       add("Gasto", "Esencial", "Fijo", "Vivienda", m + "-02", 450, "Alquiler");
       add("Gasto", "Esencial", "Fijo", "Facturas básicas", m + "-05", 48 + rand() * 20, "Luz y agua");
       add("Gasto", "Esencial", "Fijo", "Seguros obligatorios", m + "-06", 35, "Seguro coche");
@@ -98,6 +108,7 @@
       if (mi === 1) { add("Gasto", "Prescindible", "Variable", "Viajes", m + "-12", 285.4, "Escapada fin de semana"); add("Gasto", "Prescindible", "Variable", "Ropa", m + "-18", 59.9, "Zapatillas"); }
       if (mi === 0) add("Ingreso", "NA", "Variable", "Otros ingresos", m + "-15", 50, "Venta segunda mano");
       if (mi === 2) add("Gasto", "Esencial", "Variable", "Educación", m + "-10", 15, "Curso online");
+      if (mi === 3) add("Ingreso", "NA", "Variable", "Otros ingresos", m + "-20", 120, "Venta bici vieja");
     });
     tx.sort((a, b) => b[4] - a[4]);
 
