@@ -95,15 +95,15 @@
 
   // ── Cola de cambios (funciona sin conexión) ───────────────
   function saveQueue() { if (S.mode === "graph") LS.set("fin_queue", S.queue); }
-  async function doOp(type, data, okMsg) {
-    const op = { type, data, t: Date.now() };
-    Excel.applyLocal(S.model, op);
-    S.queue.push(op); saveQueue();
+  async function doOps(list, okMsg) {
+    list.forEach(op => { op.t = Date.now(); Excel.applyLocal(S.model, op); S.queue.push(op); });
+    saveQueue();
     render();
     if (okMsg) toast(okMsg);
     await flush();
     if (!S.queue.length) await refresh();
   }
+  function doOp(type, data, okMsg) { return doOps([{ type, data }], okMsg); }
   async function flush() {
     if (S.flushing || !S.queue.length) return;
     S.flushing = true;
@@ -205,6 +205,7 @@
     $$(".view").forEach(v => v.hidden = v.id !== "view-" + S.view);
     const v = $("#view-" + S.view);
     ({ inicio: renderInicio, movimientos: renderMovs, presupuesto: renderBudget, analisis: renderAnalisis, patrimonio: renderPatrimonio })[S.view](v);
+    updateTabBadge();
     if (S.pendingNew) { S.pendingNew = false; setTimeout(() => openTxForm(), 200); }
   }
 
@@ -241,6 +242,15 @@
       <div class="kpi"><span>Patrimonio neto${cur ? " · " + cur.name.toLowerCase() : ""}</span><b class="num">${cur ? eur(cur.v) : "—"}</b>
       <small class="${cur && prev ? (cur.v >= prev.v ? "pos" : "neg") : "muted"}">${cur && prev ? (cur.v >= prev.v ? "▲ " : "▼ ") + eur(Math.abs(cur.v - prev.v)) + " vs " + prev.name.toLowerCase() : "&nbsp;"}</small></div>`;
     v.appendChild(kp);
+
+    // Contador de lo que queda por asignar
+    const cIni = counter(k);
+    if (cIni) {
+      const row = document.createElement("button"); row.type = "button"; row.className = "counter-pill " + (Math.abs(cIni.libre) < 1 ? "ok" : cIni.libre > 0 ? "free" : "over");
+      row.innerHTML = `<span>${Math.abs(cIni.libre) < 1 ? "Presupuesto de " + MES[+k.split("-")[1] - 1] + " cuadrado ✓" : cIni.libre > 0 ? "Por asignar tras el ahorro" : "Asignado de más"}</span><b class="num">${Math.abs(cIni.libre) < 1 ? "" : eur(Math.abs(cIni.libre))} ›</b>`;
+      row.onclick = () => { S.budgetSeg = "Gasto"; go("presupuesto"); };
+      v.appendChild(row);
+    }
 
     // Alertas: categorías por encima de presupuesto
     const over = budgetRows(k, "Gasto").filter(r => r.budget != null && r.real > r.budget + 0.005).sort((a, b) => (b.real - b.budget) - (a.real - a.budget));
@@ -283,30 +293,63 @@
   }
 
   // ── MOVIMIENTOS ───────────────────────────────────────────
+  function goMovs(filter) {
+    Object.assign(S.movFilter, { q: "", tipo: "Todos", cat: "", month: "", limit: 60 }, filter || {});
+    go("movimientos");
+  }
   function renderMovs(v) {
     const F = S.movFilter;
-    v.innerHTML = `<input class="search" type="search" placeholder="Buscar por nota o categoría" value="${esc(F.q)}">
+    F.cat = F.cat || ""; F.month = F.month || ""; F.sort = F.sort || "fecha";
+    const months = txMonths().slice().reverse();
+    const catOpts = Excel.CATS.map(g => `<optgroup label="${g.tipo === "Gasto" ? esc(g.nat + " · " + g.per) : "Ingresos " + g.per.toLowerCase() + "s"}">${g.cats.map(c => `<option value="${esc(c)}" ${F.cat === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</optgroup>`).join("")
+      + `<optgroup label="Ahorro"><option value="Ahorro" ${F.cat === "Ahorro" ? "selected" : ""}>Ahorro</option></optgroup>`;
+    v.innerHTML = `<input class="search" type="search" placeholder="Buscar concepto, categoría o importe" value="${esc(F.q)}" aria-label="Buscar">
       <div class="chips">${["Todos", "Gasto", "Ingreso", "Ahorro"].map(x => `<button type="button" class="chip ${F.tipo === x ? "on" : ""}" data-t="${x}">${x === "Todos" ? "Todos" : x === "Gasto" ? "Gastos" : x === "Ingreso" ? "Ingresos" : "Ahorro"}</button>`).join("")}</div>
+      <div class="filters">
+        <select id="fCat" aria-label="Categoría"><option value="">Todas las categorías</option>${catOpts}</select>
+        <select id="fMes" aria-label="Mes"><option value="">Todos los meses</option>${months.map(m => `<option value="${m}" ${F.month === m ? "selected" : ""}>${monthLabel(m)}</option>`).join("")}</select>
+        <select id="fSort" aria-label="Ordenar"><option value="fecha" ${F.sort === "fecha" ? "selected" : ""}>Más recientes</option><option value="importe" ${F.sort === "importe" ? "selected" : ""}>Mayor importe</option><option value="concepto" ${F.sort === "concepto" ? "selected" : ""}>Concepto A-Z</option></select>
+      </div>
+      <div id="movSum" class="mov-sum"></div>
       <div class="card" style="padding-top:4px"><div class="list" id="movList"></div></div>`;
     const inp = $(".search", v);
     inp.oninput = () => { F.q = inp.value; F.limit = 60; drawList(); };
     $$(".chip", v).forEach(c => c.onclick = () => { F.tipo = c.dataset.t; F.limit = 60; $$(".chip", v).forEach(x => x.classList.toggle("on", x === c)); drawList(); });
+    $("#fCat", v).onchange = e => { F.cat = e.target.value; F.limit = 60; drawList(); };
+    $("#fMes", v).onchange = e => { F.month = e.target.value; F.limit = 60; drawList(); };
+    $("#fSort", v).onchange = e => { F.sort = e.target.value; F.limit = 60; drawList(); };
+    function matches(t, q) {
+      if (!q) return true;
+      const hay = (t.notas + " " + t.cat).toLowerCase();
+      const r = Expr.tryEval(q);
+      if (r.ok && /^[\d\s.,]+$/.test(q) && Math.abs(t.importe - r.value) < 0.005) return true;
+      return q.split(/\s+/).every(w => hay.includes(w));
+    }
     function drawList() {
       const q = F.q.trim().toLowerCase();
-      let l = S.model.tx.list.filter(t => (F.tipo === "Todos" || t.tipo === F.tipo) && (!q || (t.notas + " " + t.cat).toLowerCase().includes(q)));
-      l = l.slice().sort((a, b) => b.fecha.localeCompare(a.fecha));
+      let l = S.model.tx.list.filter(t => (F.tipo === "Todos" || t.tipo === F.tipo) && (!F.cat || t.cat === F.cat) && (!F.month || t.fecha.startsWith(F.month)) && matches(t, q));
+      if (F.sort === "importe") l = l.slice().sort((a, b) => b.importe - a.importe);
+      else if (F.sort === "concepto") l = l.slice().sort((a, b) => cleanNote(a.notas).localeCompare(cleanNote(b.notas), "es"));
+      else l = l.slice().sort((a, b) => b.fecha.localeCompare(a.fecha));
+      const g = l.filter(x => x.tipo === "Gasto").reduce((a, x) => a + x.importe, 0);
+      const i = l.filter(x => x.tipo === "Ingreso").reduce((a, x) => a + x.importe, 0);
+      const ah = l.filter(x => x.tipo === "Ahorro").reduce((a, x) => a + x.importe, 0);
+      const active = q || F.tipo !== "Todos" || F.cat || F.month;
+      $("#movSum", v).innerHTML = `<span><b>${l.length}</b> movimiento${l.length === 1 ? "" : "s"}${g ? ` · gastos <b class="num">${eur(g)}</b>` : ""}${i ? ` · ingresos <b class="num pos">${eur(i)}</b>` : ""}${ah ? ` · ahorro <b class="num">${eur(ah)}</b>` : ""}</span>
+        ${active ? `<button type="button" class="link" id="fClear">Quitar filtros</button>` : ""}`;
+      if ($("#fClear", v)) $("#fClear", v).onclick = () => { Object.assign(F, { q: "", tipo: "Todos", cat: "", month: "", limit: 60 }); renderMovs(v); };
       const box = $("#movList", v); box.innerHTML = "";
       if (!l.length) { box.innerHTML = `<div class="empty">No hay movimientos con ese filtro.</div>`; return; }
       let cur = null;
       l.slice(0, F.limit).forEach(t => {
         const m = t.fecha.slice(0, 7);
-        if (m !== cur) {
+        if (F.sort === "fecha" && m !== cur) {
           cur = m;
           const tot = l.filter(x => x.fecha.startsWith(m));
-          const g = tot.filter(x => x.tipo === "Gasto").reduce((a, x) => a + x.importe, 0);
-          const i = tot.filter(x => x.tipo === "Ingreso").reduce((a, x) => a + x.importe, 0);
+          const gg = tot.filter(x => x.tipo === "Gasto").reduce((a, x) => a + x.importe, 0);
+          const ii = tot.filter(x => x.tipo === "Ingreso").reduce((a, x) => a + x.importe, 0);
           const h = document.createElement("div"); h.className = "group-h";
-          h.innerHTML = `<span>${monthLabel(m)}</span><span class="num">${i ? "+" + eur(i) + " · " : ""}−${eur(g)}</span>`;
+          h.innerHTML = `<span>${monthLabel(m)}</span><span class="num">${ii ? "+" + eur(ii) + " · " : ""}${gg ? "−" + eur(gg) : ""}</span>`;
           box.appendChild(h);
         }
         box.appendChild(txRow(t));
@@ -362,15 +405,134 @@
       if (!f.fecha) return toast("Elige una fecha");
       const info = f.tipo === "Ahorro" ? Excel.SAVING : Excel.CAT_INFO[f.cat];
       const tx = { tipo: f.tipo, nat: info.nat, per: info.per, cat: f.cat, fecha: f.fecha, importe: round2(imp), notas: (f.notas || "").trim() };
+      // ¿Este ingreso supera lo previsto para su categoría ese mes?
+      let extraPart = 0;
+      if (!editing && tx.tipo === "Ingreso" && settings().askSavings !== false) {
+        const mk = tx.fecha.slice(0, 7), bud = budgetOf(tx.cat, mk);
+        if (bud != null) { const before = realCat(mk, tx.cat); extraPart = Math.max(0, before + tx.importe - bud) - Math.max(0, before - bud); }
+      }
       closeSheet();
       if (editing) await doOp("updateTx", { old: strip(t), tx }, "Cambios guardados");
-      else await doOp("addTx", { tx }, "Movimiento añadido");
+      else {
+        const pending = doOp("addTx", { tx }, "Movimiento añadido");
+        if (extraPart > 0.009) setTimeout(() => askSavings({ extra: round2(extraPart), fecha: tx.fecha, origen: tx.notas || tx.cat }), 350);
+        await pending;
+      }
     }
     draw();
     openSheet(editing ? "Editar movimiento" : "Nuevo movimiento", body);
   }
 
   // ── PRESUPUESTO ───────────────────────────────────────────
+  const Expr = Excel.Expr;
+  const nowMonth = () => todayISO().slice(0, 7);
+  const parseAmount = s => { const r = Expr.tryEval(s); return r.ok ? r.value : NaN; };
+  function realCat(k, cat) { return txOfMonth(k).filter(t => t.cat === cat).reduce((a, t) => a + t.importe, 0); }
+  function budgetOf(cat, k) {
+    const b = S.model.budget, it = b.items.find(i => i.cat === cat);
+    return it && b.months.some(m => m.key === k) ? (it.vals[k] || 0) : null;
+  }
+  // Meses de referencia: los completos (o con datos) anteriores al mes que se presupuesta
+  function refMonths(k, n) { const lim = k < nowMonth() ? k : nowMonth(); return txMonths().filter(m => m < lim).slice(-(n || 3)); }
+  function catStats(cat, k) {
+    const ref = refMonths(k, 3), vals = ref.map(m => realCat(m, cat));
+    const avg = ref.length ? vals.reduce((a, x) => a + x, 0) / ref.length : null;
+    const bIdx = S.model.budget.months.findIndex(m => m.key === k);
+    const prevBudgetMonth = bIdx > 0 ? S.model.budget.months[bIdx - 1].key : null;
+    const withB = ref.filter(m => budgetOf(cat, m) != null);
+    const six = refMonths(k, 6);
+    return {
+      ref, vals, avg,
+      last: ref.length ? vals[vals.length - 1] : null,
+      max: vals.length ? Math.max(...vals) : null,
+      prevBudgetMonth, prevBudget: prevBudgetMonth ? budgetOf(cat, prevBudgetMonth) : null,
+      overs: withB.filter(m => realCat(m, cat) > budgetOf(cat, m) * 1.05 + 5).length,
+      nRefB: withB.length,
+      dev: withB.length ? withB.reduce((a, m) => a + realCat(m, cat) - budgetOf(cat, m), 0) / withB.length : null,
+      six, sixVals: six.map(m => realCat(m, cat))
+    };
+  }
+  function noteOf(k, cat) { return (S.model.notes || {})[Excel.noteKey(k, cat)] || null; }
+  function hasNote(n) { return n && (n.nota || (n.desglose && n.desglose.length)); }
+
+  // Contador: lo que queda por asignar tras el ahorro (se mueve con los ingresos reales)
+  function counter(k, over) {
+    const b = S.model.budget;
+    if (!b.months.some(m => m.key === k)) return null;
+    const val = it => (over && over[it.row] != null) ? over[it.row] : (it.vals[k] || 0);
+    const inc = b.items.filter(i => i.tipo === "Ingreso");
+    const realInc = sumBy(txOfMonth(k).filter(t => t.tipo === "Ingreso"), t => t.cat);
+    const ingPlan = inc.reduce((a, i) => a + val(i), 0);
+    let ingCons = inc.reduce((a, i) => a + Math.max(val(i), realInc[i.cat] || 0), 0);
+    Object.keys(realInc).forEach(c => { if (!inc.some(i => i.cat === c)) ingCons += realInc[c]; });
+    const extra = Math.max(0, ingCons - ingPlan);
+    const rate = b.rate ? b.rate.value : 0;
+    const sv = b.savings, sf = sv && sv.f ? sv.f[k] : null;
+    const byRate = !!(b.rate && typeof sf === "string" && sf.replace(/\$/g, "").includes(b.rate.addr));
+    const ahoPlan = sv ? (byRate && over ? ingPlan * rate : (sv.vals[k] || 0)) : 0;
+    // El ahorro extra solo cuenta si lo apartas tú (movimiento de Ahorro con nota «Ahorro extra…»)
+    const ahoTx = txOfMonth(k).filter(t => t.tipo === "Ahorro");
+    const ahoReal = ahoTx.reduce((a, t) => a + t.importe, 0);
+    const ahoExtra = ahoTx.filter(t => /^ahorro extra/i.test(t.notas || "")).reduce((a, t) => a + t.importe, 0);
+    const aho = Math.max(ahoPlan, ahoReal - ahoExtra) + ahoExtra;
+    const gasPres = b.items.filter(i => i.tipo === "Gasto").reduce((a, i) => a + val(i), 0);
+    const gasReal = txOfMonth(k).filter(t => t.tipo === "Gasto").reduce((a, t) => a + t.importe, 0);
+    return { ingPlan, ingCons, extra, rate, byRate, ahoPlan, ahoExtra, ahoReal, aho, gasPres, gasReal, libre: ingCons - aho - gasPres };
+  }
+  function counterHTML(c, k, compact) {
+    if (!c) return "";
+    const L = c.libre, done = Math.abs(L) < 1;
+    const head = done ? "Todo asignado ✓" : L > 0 ? "Por asignar" : "Asignado de más";
+    const pct = x => c.ingCons > 0 ? Math.max(0, Math.min(100, x / c.ingCons * 100)) : 0;
+    return `<div class="counter ${done ? "ok" : L > 0 ? "free" : "over"}">
+      <div class="counter-top"><div><div class="label">${head} · ${esc(MES[+k.split("-")[1] - 1])}</div>
+        <div class="big num">${done ? eur(0) : (L > 0 ? "" : "−") + eur(Math.abs(L))}</div></div>
+        ${compact ? "" : `<div class="xsmall counter-help">Ingresos − ahorro − gastos presupuestados</div>`}</div>
+      <div class="stackbar"><span style="width:${pct(c.aho)}%;background:var(--s1)"></span><span style="width:${pct(c.gasPres)}%;background:var(--s2)"></span></div>
+      <div class="counter-lines">
+        <div><span>Ingresos${c.extra > 0.004 ? ` <small class="pos">(+${eur(c.extra)} extra)</small>` : ""}</span><b class="num">${eur(c.ingCons)}</b></div>
+        <div><span><i class="dot" style="background:var(--s1)"></i>Ahorro${c.ahoExtra > 0.004 ? ` <small>(+${eur(c.ahoExtra)} apartado del extra)</small>` : ""}</span><b class="num">−${eur(c.aho)}</b></div>
+        <div><span><i class="dot" style="background:var(--s2)"></i>Gastos presupuestados</span><b class="num">−${eur(c.gasPres)}</b></div>
+      </div>
+      ${!compact && c.extra - c.ahoExtra > 0.5 ? `<button type="button" class="link counter-save" data-extra="${round2(c.extra - c.ahoExtra)}">Tienes ${eur(c.extra - c.ahoExtra)} de ingresos extra. ¿Apartar una parte para ahorro?</button>` : ""}
+      </div>`;
+  }
+
+  // Pregunta si apartar ahorro de un ingreso no previsto (nunca se hace solo)
+  function askSavings(o) {
+    const rate = S.model.budget.rate ? S.model.budget.rate.value : 0;
+    const sug = rate ? Math.round(o.extra * rate) : 0;
+    const body = document.createElement("div");
+    body.innerHTML = `<p class="small" style="margin-top:0">Has recibido <b>${eur(o.extra)}</b> más de lo previsto (${esc(o.origen)}). Si no apartas nada, queda <b>disponible para asignar</b> en el presupuesto.</p>
+      ${sug ? `<button class="btn" id="aRate" type="button">Apartar ${Math.round(rate * 100)}% · ${eur(sug)}</button><div style="height:10px"></div>` : ""}
+      <div class="field" style="margin-bottom:8px"><label for="aAmt">Otra cantidad</label><input id="aAmt" class="num" inputmode="decimal" placeholder="0,00"></div>
+      <button class="btn secondary" id="aOther" type="button">Apartar esta cantidad</button><div style="height:10px"></div>
+      <button class="btn secondary" id="aNo" type="button">No, dejarlo para asignar</button>
+      <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="aNever"> No volver a preguntar (se puede cambiar en Ajustes)</label>
+      <p class="xsmall muted">Se registra como un movimiento de Ahorro con la nota «Ahorro extra», que el contador descuenta.</p>`;
+    const done = async amt => {
+      if ($("#aNever", body).checked) saveSettings({ askSavings: false });
+      closeSheet();
+      if (!(amt > 0)) return;
+      const tx = { tipo: "Ahorro", nat: Excel.SAVING.nat, per: Excel.SAVING.per, cat: "Ahorro", fecha: o.fecha, importe: round2(amt), notas: "Ahorro extra · " + o.origen };
+      await doOp("addTx", { tx }, `Apartados ${eur(amt)} para ahorro`);
+    };
+    if ($("#aRate", body)) $("#aRate", body).onclick = () => done(sug);
+    $("#aOther", body).onclick = () => { const a = parseAmount($("#aAmt", body).value); if (!(a > 0)) return toast("Escribe una cantidad"); done(a); };
+    $("#aNo", body).onclick = () => done(0);
+    openSheet("¿Apartas algo para ahorro?", body);
+  }
+  function updateTabBadge() {
+    const tabB = $('.tab[data-view="presupuesto"]'); if (!tabB || !S.model) return;
+    let bdg = $(".tab-badge", tabB);
+    const c = counter(nowMonth());
+    if (!c || Math.abs(c.libre) < 1) { if (bdg) bdg.remove(); return; }
+    if (!bdg) { bdg = document.createElement("span"); bdg.className = "tab-badge num"; tabB.appendChild(bdg); }
+    bdg.className = "tab-badge num " + (c.libre > 0 ? "free" : "over");
+    bdg.textContent = (c.libre > 0 ? "" : "−") + Charts.eurShort(Math.abs(c.libre)) + "€";
+    bdg.title = (c.libre > 0 ? "Por asignar: " : "Asignado de más: ") + eur(Math.abs(c.libre));
+  }
+
   function budgetRows(k, tipo) {
     const b = S.model.budget, inB = b.months.some(m => m.key === k);
     const real = sumBy(txOfMonth(k).filter(t => t.tipo === tipo), t => t.cat);
@@ -380,14 +542,25 @@
     const b = S.model.budget;
     const months = b.months.map(m => m.key);
     if (!months.length) { v.innerHTML = `<div class="empty">No encuentro columnas de meses en la hoja PPTO.</div>`; return; }
-    if (!months.includes(S.month)) { const p = months.filter(x => x <= todayISO().slice(0, 7)); S.month = p.length ? p[p.length - 1] : months[0]; }
+    if (!months.includes(S.month)) { const p = months.filter(x => x <= nowMonth()); S.month = p.length ? p[p.length - 1] : months[0]; }
     const k = S.month, tipo = S.budgetSeg;
     v.innerHTML = "";
     v.appendChild(monthSwitch(months, render));
+    const cObj = counter(k);
+    if (cObj) {
+      const cnt = document.createElement("div"); cnt.className = "card counter-sticky" + (settings().counterOpen ? " open" : "");
+      cnt.innerHTML = counterHTML(cObj, k) + `<button type="button" class="counter-toggle" aria-label="Ver detalle">${settings().counterOpen ? "Ocultar detalle ▴" : "Ver detalle ▾"}</button>`;
+      $(".counter-toggle", cnt).onclick = () => { saveSettings({ counterOpen: !settings().counterOpen }); render(); };
+      const sv = $(".counter-save", cnt);
+      if (sv) sv.onclick = () => askSavings({ extra: +sv.dataset.extra, fecha: k === nowMonth() ? todayISO() : k + "-01", origen: "ingresos extra de " + MES[+k.split("-")[1] - 1] });
+      v.appendChild(cnt);
+      document.documentElement.style.setProperty("--topbar-h", $(".topbar").offsetHeight + "px");
+    }
     const seg = document.createElement("div"); seg.className = "seg";
-    seg.innerHTML = `<button type="button" class="${tipo === "Gasto" ? "on" : ""}" data-s="Gasto">Gastos</button><button type="button" class="${tipo === "Ingreso" ? "on" : ""}" data-s="Ingreso">Ingresos</button>`;
+    seg.innerHTML = [["Gasto", "Gastos"], ["Ingreso", "Ingresos"], ["Plan", "Planificar"]].map(([s, l]) => `<button type="button" class="${tipo === s ? "on" : ""}" data-s="${s}">${l}</button>`).join("");
     $$("button", seg).forEach(x => x.onclick = () => { S.budgetSeg = x.dataset.s; render(); });
     v.appendChild(seg);
+    if (tipo === "Plan") return renderPlan(v, k);
 
     const rows = budgetRows(k, tipo);
     const tb = rows.reduce((a, r) => a + r.budget, 0), tr = rows.reduce((a, r) => a + r.real, 0);
@@ -409,7 +582,12 @@
         const p = r.budget ? r.real / r.budget : (r.real ? 2 : 0);
         const cls = tipo === "Gasto" ? (p > 1.0001 ? "over" : p > 0.85 ? "near" : "") : "";
         const tag = tipo === "Gasto" && r.real > r.budget + 0.005 ? `<span class="tag over">Revisar</span>` : "";
-        html += `<div class="brow" data-row="${r.row}" style="cursor:pointer"><div class="brow-top"><span class="name">${icon(r.cat)} ${esc(r.cat)} ${tag}</span><span class="vals num">${eur(r.real)} / <b>${eur(r.budget)}</b></span></div>
+        const n = noteOf(k, r.cat);
+        const it = b.items.find(i => i.row === r.row);
+        const ex = Expr.fromFormula(it.f[k]);
+        const sub = hasNote(n) ? (n.nota || n.desglose.map(x => x.l || x.e).filter(Boolean).join(" · ")) : (ex && !Expr.isPlainNumber(ex) ? ex : "");
+        html += `<div class="brow" data-row="${r.row}" style="cursor:pointer"><div class="brow-top"><span class="name">${icon(r.cat)} ${esc(r.cat)} ${hasNote(n) ? `<span class="note-ico" title="Tiene notas">📝</span>` : ""} ${tag}</span><span class="vals num">${eur(r.real)} / <b>${eur(r.budget)}</b></span></div>
+          ${sub ? `<div class="brow-sub">${esc(sub)}</div>` : ""}
           <div class="prog ${cls}"><div style="width:${Math.min(100, p * 100)}%"></div></div></div>`;
       });
     });
@@ -422,58 +600,292 @@
     $("#bAll", actions).onclick = () => editBudgetMonth(k);
     v.appendChild(actions);
     const note = document.createElement("p"); note.className = "xsmall muted"; note.style.margin = "0 4px";
-    note.textContent = `Los cambios se escriben en la hoja PPTO (columna ${b.months.find(m => m.key === k).col}). Para presupuestar meses nuevos, añade sus columnas (con la fecha en la cabecera) en el Excel.`;
+    note.textContent = `Toca una partida para editarla: admite sumas y restas (p. ej. 8,25 + 144,09 − 30) y un concepto por línea. Se guarda en la hoja PPTO (columna ${b.months.find(m => m.key === k).col}) y las notas en la hoja «App_Notas».`;
     v.appendChild(note);
+  }
+
+  // Barra de operadores para el teclado numérico del móvil
+  function opBar(container, getTarget, extra) {
+    const bar = document.createElement("div"); bar.className = "opbar";
+    bar.innerHTML = (extra || "") + ["+", "−", "(", ")"].map(o => `<button type="button" class="opk" data-o="${o}">${o}</button>`).join("");
+    $$(".opk[data-o]", bar).forEach(bt => {
+      bt.addEventListener("pointerdown", e => e.preventDefault());
+      bt.addEventListener("click", () => {
+        const inp = getTarget(); if (!inp) return;
+        const o = bt.dataset.o === "−" ? "-" : bt.dataset.o;
+        const ins = /[+\-]/.test(o) ? ` ${o} ` : o;
+        const a = inp.selectionStart != null ? inp.selectionStart : inp.value.length, z = inp.selectionEnd != null ? inp.selectionEnd : a;
+        inp.value = inp.value.slice(0, a) + ins + inp.value.slice(z);
+        const pos = a + ins.length; try { inp.setSelectionRange(pos, pos); } catch (e) {}
+        inp.focus(); inp.dispatchEvent(new Event("input"));
+      });
+    });
+    container.appendChild(bar);
+    return bar;
   }
 
   function editBudgetItem(row, k) {
     const b = S.model.budget, it = b.items.find(i => i.row === row);
     const m = b.months.find(x => x.key === k);
-    const real = txOfMonth(k).filter(t => t.cat === it.cat).reduce((a, t) => a + t.importe, 0);
-    const past = txMonths().filter(x => x < k).slice(-3);
-    const avg = past.length ? past.reduce((a, x) => a + txOfMonth(x).filter(t => t.cat === it.cat).reduce((s, t) => s + t.importe, 0), 0) / past.length : null;
+    const st = catStats(it.cat, k);
+    const real = realCat(k, it.cat);
+    const nTx = txOfMonth(k).filter(t => t.cat === it.cat).length;
     const later = b.months.filter(x => x.key > k);
+    const note = noteOf(k, it.cat);
+    const cur = it.vals[k] || 0;
+    // Líneas del desglose: notas guardadas → fórmula de la celda → importe
+    let lines = null, mismatch = false;
+    const ex = Expr.fromFormula(it.f[k]);
+    if (note && note.desglose.length) {
+      const sum = note.desglose.reduce((a, x) => a + (parseAmount(x.e) || 0), 0);
+      if (Math.abs(sum - cur) < 0.01) lines = note.desglose.map(x => ({ e: x.e || "", l: x.l || "" }));
+      else mismatch = true;
+    }
+    if (!lines && ex) {
+      const terms = Expr.splitTerms(ex);
+      lines = terms.map((t, i) => ({ e: t, l: note && note.desglose.length === terms.length ? (note.desglose[i].l || "") : "" }));
+    }
+    if (!lines) lines = [{ e: cur ? Expr.fmt(cur) : "", l: "" }];
+    let lastFocus = null;
+
     const body = document.createElement("div");
-    body.innerHTML = `<p class="muted small" style="margin-top:0">${monthLabel(k)} · real hasta hoy: <b>${eur(real)}</b>${avg != null ? ` · media últimos ${past.length} meses: <b>${eur(avg)}</b>` : ""}</p>
-      <div class="field"><label for="bVal">Presupuesto</label><input id="bVal" class="amount-input num" type="text" inputmode="decimal" value="${String(round2(it.vals[k] || 0)).replace(".", ",")}"></div>
-      ${typeof it.f[k] === "string" && it.f[k][0] === "=" ? `<p class="xsmall muted">La celda tenía la fórmula <code>${esc(it.f[k])}</code>; se sustituirá por el importe.</p>` : ""}
+    body.innerHTML = `
+      <div class="mini-kpis">
+        <div><span>Real ${esc(monthShort(k))}</span><b class="num">${eur(real)}</b></div>
+        <div><span>Media ${st.ref.length || ""} meses</span><b class="num">${st.avg != null ? eur(st.avg) : "—"}</b></div>
+        <div><span>Presup. ${st.prevBudgetMonth ? esc(monthShort(st.prevBudgetMonth)) : "anterior"}</span><b class="num">${st.prevBudget != null ? eur(st.prevBudget) : "—"}</b></div>
+      </div>
+      <div id="bHist"></div>
+      ${mismatch ? `<div class="alert" style="margin-bottom:10px"><span class="i">!</span><div>El importe del Excel (${eur(cur)}) no coincide con el desglose que guardaste. Revisa las líneas.</div></div>` : ""}
+      <div class="chips" id="quick" style="margin:10px 0">
+        ${st.avg != null ? `<button type="button" class="chip" data-v="${Math.round(st.avg)}">Media: ${eur(Math.round(st.avg))}</button>` : ""}
+        ${st.last != null ? `<button type="button" class="chip" data-v="${round2(st.last)}">Real ${esc(monthShort(st.ref[st.ref.length - 1]))}: ${eur(st.last)}</button>` : ""}
+        ${st.prevBudget != null ? `<button type="button" class="chip" data-v="${round2(st.prevBudget)}">Como ${esc(monthShort(st.prevBudgetMonth))}: ${eur(st.prevBudget)}</button>` : ""}
+        ${st.max != null && st.max > (st.avg || 0) + 1 ? `<button type="button" class="chip" data-v="${round2(st.max)}">Máximo: ${eur(st.max)}</button>` : ""}
+      </div>
+      <div class="field" style="margin-bottom:6px"><label>Importe y desglose <span class="muted">(puedes sumar y restar)</span></label></div>
+      <div id="lines"></div>
+      <div id="ops"></div>
+      <div class="total-row"><span>Total partida</span><b class="num" id="tot"></b></div>
+      <div class="field"><label for="bNote">Recordatorio / comentario</label><textarea id="bNote" rows="2" placeholder="Ej.: incluye seguro moto 2º pago">${esc(note ? note.nota : "")}</textarea></div>
       ${later.length ? `<label class="small" style="display:flex;gap:8px;align-items:center;margin-bottom:14px"><input type="checkbox" id="bLater"> Aplicar también a ${later.map(x => monthShort(x.key)).join(", ")}</label>` : ""}
-      <button class="btn" id="bSave" type="button">Guardar</button>`;
-    $("#bSave", body).onclick = async () => {
-      const val = round2(parseFloat($("#bVal", body).value.replace(/\./g, "").replace(",", ".")) || 0);
-      const cells = [{ addr: m.col + row, value: val }];
-      if ($("#bLater", body) && $("#bLater", body).checked) later.forEach(x => cells.push({ addr: x.col + row, value: val }));
-      closeSheet();
-      await doOp("setBudgetCells", { cells }, "Presupuesto actualizado");
+      <button class="btn" id="bSave" type="button">Guardar</button>
+      ${nTx ? `<div style="height:10px"></div><button class="btn secondary" id="bMovs" type="button">Ver los ${nTx} movimientos de ${esc(monthShort(k))}</button>` : ""}`;
+
+    const box = $("#lines", body);
+    const drawLines = () => {
+      box.innerHTML = lines.map((l, i) => `
+        <div class="dline" data-i="${i}">
+          <div class="dline-top"><input class="expr num" inputmode="decimal" value="${esc(l.e)}" placeholder="0,00" aria-label="Importe línea ${i + 1}">
+            <span class="eq num"></span>
+            ${lines.length > 1 ? `<button type="button" class="icon-btn del" aria-label="Quitar línea">✕</button>` : ""}</div>
+          <input class="lbl" value="${esc(l.l)}" placeholder="Concepto (opcional)" aria-label="Concepto línea ${i + 1}">
+        </div>`).join("");
+      $$(".dline", box).forEach(d => {
+        const i = +d.dataset.i, e = $(".expr", d), lb = $(".lbl", d);
+        e.addEventListener("focus", () => lastFocus = e);
+        e.addEventListener("input", () => { lines[i].e = e.value; recalc(); });
+        lb.addEventListener("input", () => lines[i].l = lb.value);
+        const del = $(".del", d); if (del) del.onclick = () => { lines.splice(i, 1); drawLines(); };
+      });
+      recalc();
     };
-    openSheet(`${icon(it.cat)} ${it.cat}`, body);
+    const recalc = () => {
+      let tot = 0, bad = false;
+      $$(".dline", box).forEach(d => {
+        const e = $(".expr", d), eq = $(".eq", d), r = Expr.tryEval(e.value);
+        if (!e.value.trim()) { eq.textContent = ""; return; }
+        if (r.ok) { tot += r.value; eq.textContent = Expr.isPlainNumber(e.value) ? "" : "= " + eur(r.value); eq.classList.remove("neg"); }
+        else { bad = true; eq.textContent = "¿?"; eq.classList.add("neg"); }
+      });
+      $("#tot", body).textContent = bad ? "revisa" : eur(round2(tot));
+    };
+    opBar($("#ops", body), () => lastFocus || $(".expr", box), `<button type="button" class="opk wide" id="addLine">＋ Línea</button>`);
+    $("#addLine", body).onclick = () => { lines.push({ e: "", l: "" }); drawLines(); const all = $$(".expr", box); all[all.length - 1].focus(); };
+    $$("#quick .chip", body).forEach(c => c.onclick = () => { lines = [{ e: Expr.fmt(+c.dataset.v), l: "" }]; drawLines(); });
+    drawLines();
+    requestAnimationFrame(() => {
+      const ms = st.six.concat(k);
+      Charts.stackedBars($("#bHist", body), ms.map(monthShort), [{ name: "Real", color: SERIES[0], values: ms.map(x => realCat(x, it.cat)) }],
+        { height: 130, target: ms.map(x => budgetOf(it.cat, x)), targetName: "Presupuesto", fullLabels: ms.map(monthLabel) });
+    });
+    if ($("#bMovs", body)) $("#bMovs", body).onclick = () => { closeSheet(); goMovs({ cat: it.cat, month: k }); };
+
+    $("#bSave", body).onclick = async () => {
+      const used = lines.map(l => ({ e: (l.e || "").trim(), l: (l.l || "").trim() })).filter(l => l.e || l.l);
+      for (const l of used) if (l.e && !Expr.tryEval(l.e).ok) return toast("Revisa el importe: " + l.e);
+      const parts = used.filter(l => l.e).map(l => (used.length > 1 && /[*/]/.test(l.e) ? `(${l.e})` : l.e));
+      const exprAll = parts.join(" + ").replace(/\+\s*-\s*/g, "- ");
+      const cell = parts.length ? Expr.toCell(exprAll) : 0;
+      const notaTxt = $("#bNote", body).value.trim();
+      const withLabels = used.some(l => l.l);
+      const desglose = (used.length > 1 || withLabels) ? used : [];
+      const targets = [m].concat($("#bLater", body) && $("#bLater", body).checked ? later : []);
+      const cells = targets.map(x => ({ addr: x.col + row, value: cell }));
+      const notes = targets.filter(x => notaTxt || desglose.length || hasNote(noteOf(x.key, it.cat)))
+        .map(x => ({ mes: x.key, cat: it.cat, nota: notaTxt, desglose }));
+      closeSheet();
+      const list = [{ type: "setBudgetCells", data: { cells } }];
+      if (notes.length) list.push({ type: "setNotes", data: { notes } });
+      await doOps(list, "Partida guardada");
+    };
+    openSheet(`${icon(it.cat)} ${it.cat} · ${monthShort(k)}`, body);
   }
 
-  function editBudgetMonth(k) {
+  function editBudgetMonth(k, base) {
     const b = S.model.budget, m = b.months.find(x => x.key === k);
     const idx = b.months.indexOf(m), prevM = b.months[idx - 1];
+    const stats = {}; b.items.forEach(i => stats[i.row] = catStats(i.cat, k));
+    const lastRef = refMonths(k, 1)[0];
+    let lastFocus = null;
     const body = document.createElement("div");
-    const draw = (src) => {
-      body.innerHTML = `${prevM ? `<button class="btn secondary" id="cp" type="button" style="margin-bottom:12px">Copiar de ${monthLabel(prevM.key)}</button>` : ""}
-        ${["Ingreso", "Gasto"].map(tp => `<div class="bgroup-h"><h4>${tp === "Gasto" ? "Gastos" : "Ingresos"}</h4></div>` + b.items.filter(i => i.tipo === tp).map(i => `
-          <div class="brow"><div class="brow-top" style="align-items:center"><span class="name">${icon(i.cat)} ${esc(i.cat)}</span>
-          <input class="budget-edit num" data-row="${i.row}" inputmode="decimal" value="${String(round2((src || i.vals)[src ? i.row : k] || 0)).replace(".", ",")}"></div></div>`).join("")).join("")}
-        <div style="height:12px"></div><button class="btn" id="save" type="button">Guardar ${monthLabel(k)}</button>`;
-      if (prevM) $("#cp", body).onclick = () => { const src2 = {}; b.items.forEach(i => src2[i.row] = i.vals[prevM.key]); draw(src2); toast("Copiado. Revisa y guarda."); };
-      $("#save", body).onclick = async () => {
-        const cells = [];
-        $$(".budget-edit", body).forEach(inp => {
-          const row = +inp.dataset.row, it = b.items.find(i => i.row === row);
-          const val = round2(parseFloat(inp.value.replace(/\./g, "").replace(",", ".")) || 0);
-          if (Math.abs(val - (it.vals[k] || 0)) > 0.004) cells.push({ addr: m.col + row, value: val });
-        });
-        closeSheet();
-        if (!cells.length) return toast("Sin cambios");
-        await doOp("setBudgetCells", { cells }, `Guardadas ${cells.length} partidas`);
-      };
+    const startVal = i => {
+      const own = Expr.fromFormula(i.f[k]) || Expr.fmt(i.vals[k] || 0);
+      // Las partidas con desglose (conceptos) se respetan al rellenar con medias o reales
+      if ((base === "avg" || base === "last") && hasNote(noteOf(k, i.cat)) && noteOf(k, i.cat).desglose.length) return own;
+      if (base === "prev" && prevM) return Expr.fromFormula(i.f[prevM.key]) || Expr.fmt(i.vals[prevM.key] || 0);
+      if (base === "avg" && i.tipo === "Gasto" && stats[i.row].avg != null) return Expr.fmt(Math.round(stats[i.row].avg));
+      if (base === "last" && i.tipo === "Gasto" && lastRef) return Expr.fmt(round2(realCat(lastRef, i.cat)));
+      return Expr.fromFormula(i.f[k]) || Expr.fmt(i.vals[k] || 0);
     };
-    draw(null);
+    body.innerHTML = `<div id="mCounter"></div>
+      <div class="small muted" style="margin:10px 0 6px">Rellenar con:</div>
+      <div class="chips" style="margin-bottom:10px">
+        <button type="button" class="chip ${!base ? "on" : ""}" data-b="">Lo actual</button>
+        ${prevM ? `<button type="button" class="chip ${base === "prev" ? "on" : ""}" data-b="prev">Presupuesto de ${esc(monthShort(prevM.key))}</button>` : ""}
+        <button type="button" class="chip ${base === "avg" ? "on" : ""}" data-b="avg">Media real (3 meses)</button>
+        ${lastRef ? `<button type="button" class="chip ${base === "last" ? "on" : ""}" data-b="last">Real de ${esc(monthShort(lastRef))}</button>` : ""}
+      </div>
+      ${["Ingreso", "Gasto"].map(tp => `<div class="bgroup-h"><h4>${tp === "Gasto" ? "Gastos" : "Ingresos"}</h4></div>` + b.items.filter(i => i.tipo === tp).map(i => {
+        const s2 = stats[i.row];
+        return `<div class="brow"><div class="brow-top" style="align-items:center"><span class="name small">${icon(i.cat)} ${esc(i.cat)}
+          ${s2.avg != null ? `<div class="xsmall muted">media ${eur(s2.avg)}${s2.prevBudget != null ? ` · ant. ${eur(s2.prevBudget)}` : ""}</div>` : ""}</span>
+          <span style="text-align:right"><input class="budget-edit num" data-row="${i.row}" inputmode="decimal" value="${esc(startVal(i))}"><div class="eq xsmall num"></div></span></div></div>`;
+      }).join("")).join("")}
+      <div id="ops" style="position:sticky;bottom:0;background:var(--surface);padding:8px 0"></div>
+      <button class="btn" id="save" type="button">Guardar ${monthLabel(k)}</button>`;
+    const inputs = $$(".budget-edit", body);
+    const recalc = () => {
+      const over = {}; let bad = false;
+      inputs.forEach(inp => {
+        const r = Expr.tryEval(inp.value), eq = inp.parentElement.querySelector(".eq");
+        if (r.ok) { over[+inp.dataset.row] = r.value; eq.textContent = Expr.isPlainNumber(inp.value) || !inp.value.trim() ? "" : "= " + eur(r.value); eq.classList.remove("neg"); }
+        else { bad = true; eq.textContent = "¿?"; eq.classList.add("neg"); }
+      });
+      $("#mCounter", body).innerHTML = counterHTML(counter(k, over), k, true);
+      return bad;
+    };
+    inputs.forEach(inp => { inp.addEventListener("focus", () => lastFocus = inp); inp.addEventListener("input", recalc); });
+    opBar($("#ops", body), () => lastFocus);
+    $$(".chips .chip", body).forEach(c => c.onclick = () => { closeSheet(); setTimeout(() => editBudgetMonth(k, c.dataset.b || undefined), 50); });
+    recalc();
+    $("#save", body).onclick = async () => {
+      if (recalc()) return toast("Hay importes que no se entienden (¿?)");
+      const cells = [];
+      inputs.forEach(inp => {
+        const row = +inp.dataset.row, it = b.items.find(i => i.row === row);
+        const cell = inp.value.trim() ? Expr.toCell(inp.value) : 0;
+        const oldCell = typeof it.f[k] === "string" && it.f[k][0] === "=" ? it.f[k].replace(/\s+/g, "").replace(/^=\+/, "=") : round2(it.vals[k] || 0);
+        const same = typeof cell === "number" ? (typeof oldCell === "number" && Math.abs(cell - oldCell) < 0.004) : cell === oldCell;
+        if (!same) cells.push({ addr: m.col + row, value: cell });
+      });
+      closeSheet();
+      if (!cells.length) return toast("Sin cambios");
+      await doOps([{ type: "setBudgetCells", data: { cells } }], `Guardadas ${cells.length} partidas`);
+    };
     openSheet(`Presupuesto · ${monthLabel(k)}`, body);
+  }
+
+  // ── Planificar: consejos y referencias para presupuestar ──
+  function insights(k) {
+    const b = S.model.budget, out = [], mk = MES[+k.split("-")[1] - 1];
+    const exp = b.items.filter(i => i.tipo === "Gasto");
+    exp.forEach(i => {
+      const s = catStats(i.cat, k), bud = budgetOf(i.cat, k);
+      if (s.avg == null) return;
+      if (s.overs >= 2 && s.nRefB >= 2) {
+        out.push({ ico: "⚠️", impact: Math.abs(s.dev || 0) + 30, cat: i.cat, text: `<b>${esc(i.cat)}</b>: te has pasado ${s.overs} de los últimos ${s.nRefB} meses (gastas de media ${eur(s.avg)}). ${bud != null && bud < s.avg ? `Para ${mk} tienes ${eur(bud)}: súbelo a ~${eur(Math.round(s.avg))} o recorta.` : "Vigila esta partida."}` });
+      } else if (bud != null && s.avg > 20 && bud < s.avg * 0.8) {
+        out.push({ ico: "⚠️", impact: s.avg - bud, cat: i.cat, text: `<b>${esc(i.cat)}</b>: para ${mk} presupuestas ${eur(bud)}, pero tu media es ${eur(s.avg)}. Te faltarían ~${eur(s.avg - bud)}.` });
+      }
+      if (bud != null && bud >= 20 && s.avg < bud * 0.35 && s.ref.length >= 2) {
+        out.push({ ico: "💡", impact: bud - s.avg, cat: i.cat, text: `<b>${esc(i.cat)}</b>: presupuestas ${eur(bud)} y sueles gastar ${eur(s.avg)}. Podrías liberar ~${eur(bud - Math.round(s.avg))} para ahorro u otras partidas.` });
+      }
+      if (s.vals.length >= 3) {
+        const prev = (s.vals[0] + s.vals[1]) / 2, last = s.vals[2];
+        if (last > prev * 1.35 && last - prev > 25) out.push({ ico: "📈", impact: last - prev, cat: i.cat, text: `<b>${esc(i.cat)}</b> sube: ${eur(last)} en ${esc(monthShort(s.ref[2]))} frente a ${eur(prev)} de media antes.` });
+      }
+    });
+    const c = counter(k);
+    if (c) {
+      if (c.libre < -1) out.push({ ico: "⚠️", impact: 1e6, text: `Para ${mk} has asignado <b>${eur(-c.libre)}</b> más de lo que ingresas después de ahorrar. Ajusta partidas o el ahorro.` });
+      else if (c.libre > 30) out.push({ ico: "💡", impact: c.libre, text: `Te quedan <b>${eur(c.libre)}</b> sin asignar en ${mk}. Puedes reservarlos como colchón, sumarlos al ahorro o repartirlos.` });
+    }
+    const ref = refMonths(k, 3);
+    if (ref.length) {
+      const ing = ref.reduce((a, m) => a + monthStats(m).ing, 0), aho = ref.reduce((a, m) => a + monthStats(m).aho, 0);
+      const gas = ref.reduce((a, m) => a + monthStats(m).gas, 0), pres = ref.reduce((a, m) => a + monthStats(m).pres, 0);
+      if (b.rate && ing > 0 && aho / ing < b.rate.value - 0.03) out.push({ ico: "🐷", impact: 500, text: `En los últimos ${ref.length} meses has ahorrado el <b>${Math.round(aho / ing * 100)}%</b> de tus ingresos; tu objetivo es el ${Math.round(b.rate.value * 100)}%.` });
+      else if (b.rate && ing > 0) out.push({ ico: "✅", impact: 1, text: `Ahorro en línea con tu objetivo: <b>${Math.round(aho / ing * 100)}%</b> de los ingresos en los últimos ${ref.length} meses.` });
+      if (gas > 0 && pres / gas > 0.5) out.push({ ico: "💡", impact: 200, text: `Los gastos prescindibles son el <b>${Math.round(pres / gas * 100)}%</b> de lo que gastas. Ahí está tu mayor margen de ajuste.` });
+    }
+    return out.sort((a, b2) => b2.impact - a.impact);
+  }
+
+  function renderPlan(v, k) {
+    const b = S.model.budget, mk = MES[+k.split("-")[1] - 1];
+    const ref = refMonths(k, 3);
+    // Consejos
+    const ins = insights(k);
+    const ci = document.createElement("div"); ci.className = "card";
+    ci.innerHTML = `<h3>Consejos para ${esc(mk)}</h3><p class="xsmall muted" style="margin:-6px 0 8px">Según ${ref.length ? `${ref.map(monthShort).join(", ")}` : "tus datos"}.</p>
+      ${ins.length ? `<div class="tips">${ins.slice(0, 6).map(t => `<div class="tip" ${t.cat ? `data-cat="${esc(t.cat)}"` : ""}><span class="tip-ico">${t.ico}</span><span>${t.text}</span></div>`).join("")}</div>` : `<p class="small muted">Aún no hay meses suficientes para darte consejos.</p>`}`;
+    $$(".tip[data-cat]", ci).forEach(t => { t.style.cursor = "pointer"; t.onclick = () => { const it = b.items.find(i => i.cat === t.dataset.cat); if (it) editBudgetItem(it.row, k); }; });
+    v.appendChild(ci);
+
+    // Referencia por partida
+    const cr = document.createElement("div"); cr.className = "card";
+    const exp = b.items.filter(i => i.tipo === "Gasto").map(i => ({ i, s: catStats(i.cat, k), bud: budgetOf(i.cat, k) }))
+      .filter(x => (x.s.avg || 0) > 0 || (x.bud || 0) > 0).sort((a, b2) => (b2.s.avg || 0) - (a.s.avg || 0));
+    cr.innerHTML = `<h3>Referencia por partida</h3>
+      <p class="xsmall muted" style="margin:-6px 0 8px">Barras: lo gastado en los últimos meses (azul, el más reciente). Raya: lo presupuestado para ${esc(mk)}. Toca para ajustar.</p>
+      <div class="refs">${exp.map(x => {
+        const tag = x.bud == null || x.s.avg == null ? "" : (x.bud < x.s.avg * 0.85 && x.s.avg - x.bud > 10 ? `<span class="tag warn">Corto</span>` : (x.bud > x.s.avg * 1.5 && x.bud - x.s.avg > 20 ? `<span class="tag">Holgado</span>` : ""));
+        return `<button type="button" class="ref-row" data-row="${x.i.row}"><span class="ref-name">${icon(x.i.cat)} ${esc(x.i.cat)} ${tag}</span>
+          ${Charts.sparkbars(x.s.sixVals.slice(-4), x.bud)}
+          <span class="ref-vals num"><b>${x.bud != null ? eur(x.bud) : "—"}</b><small>media ${x.s.avg != null ? eur(x.s.avg) : "—"}</small></span></button>`;
+      }).join("")}</div>`;
+    $$(".ref-row", cr).forEach(r => r.onclick = () => editBudgetItem(+r.dataset.row, k));
+    v.appendChild(cr);
+
+    // Desviación media
+    const devs = b.items.filter(i => i.tipo === "Gasto").map(i => ({ i, s: catStats(i.cat, k) })).filter(x => x.s.dev != null && Math.abs(x.s.dev) >= 1)
+      .sort((a, b2) => b2.s.dev - a.s.dev);
+    if (devs.length) {
+      const cd = card("¿Dónde fallaba el presupuesto?", v, `Diferencia media entre lo gastado y lo presupuestado (${ref.map(monthShort).join(", ")}).`);
+      requestAnimationFrame(() => Charts.diverging($(".ch", cd), devs.map(x => ({
+        label: x.i.cat, value: x.s.dev,
+        tip: `De media gastaste ${eur(x.s.avg)}; ${x.s.dev > 0 ? "te pasaste " + eur(x.s.dev) : "te sobraron " + eur(-x.s.dev)} al mes.`,
+        onClick: () => editBudgetItem(x.i.row, k)
+      }))));
+    }
+
+    // Fijos vs variables
+    const ms = refMonths(k, 6);
+    if (ms.length) {
+      const fij = ms.map(m => txOfMonth(m).filter(t => t.tipo === "Gasto" && t.per === "Fijo").reduce((a, t) => a + t.importe, 0));
+      const vari = ms.map(m => txOfMonth(m).filter(t => t.tipo === "Gasto" && t.per !== "Fijo").reduce((a, t) => a + t.importe, 0));
+      const avgF = fij.reduce((a, x) => a + x, 0) / ms.length, avgV = vari.reduce((a, x) => a + x, 0) / ms.length;
+      const cf = card("Fijos frente a variables", v, `Tus gastos fijos rondan <b>${eur(avgF)}</b>/mes: es la base de cada presupuesto. Lo variable (media ${eur(avgV)}) es donde puedes ajustar.`);
+      requestAnimationFrame(() => Charts.stackedBars($(".ch", cf), ms.map(monthShort), [
+        { name: "Fijos", color: SERIES[0], values: fij }, { name: "Variables", color: SERIES[1], values: vari }
+      ], { fullLabels: ms.map(monthLabel), target: ms.map(m => b.months.some(x => x.key === m) ? b.items.filter(i => i.tipo === "Gasto").reduce((a, i) => a + (i.vals[m] || 0), 0) : null) }));
+    }
+
+    const bt = document.createElement("div"); bt.className = "btn-row";
+    bt.innerHTML = `<button class="btn" type="button" id="pAvg">Preparar ${esc(mk)} con tus medias</button>`;
+    $("#pAvg", bt).onclick = () => editBudgetMonth(k, "avg");
+    v.appendChild(bt);
   }
 
   // ── ANÁLISIS ──────────────────────────────────────────────
@@ -501,9 +913,18 @@
     Charts.donut($(".ch", c1), data, { center: "gastado" });
 
     // Real vs presupuesto
-    const rows = budgetRows(k, "Gasto").filter(r => r.real > 0 || (r.budget || 0) > 0).sort((a, b) => b.real - a.real).map(r => ({ label: r.cat, real: r.real, budget: r.budget }));
-    const c2 = card("Real vs presupuesto", v, rows.some(r => r.budget != null) ? "La raya negra es el presupuesto; en rojo, lo que se pasa." : "Este mes no tiene presupuesto en PPTO.");
+    const rows = budgetRows(k, "Gasto").filter(r => r.real > 0 || (r.budget || 0) > 0).sort((a, b) => b.real - a.real).map(r => ({ label: r.cat, real: r.real, budget: r.budget, onClick: () => goMovs({ cat: r.cat, month: k }) }));
+    const c2 = card("Real vs presupuesto", v, rows.some(r => r.budget != null) ? "La raya negra es el presupuesto; en rojo, lo que se pasa. Toca una barra para ver sus movimientos." : "Este mes no tiene presupuesto en PPTO.");
     requestAnimationFrame(() => Charts.bullet($(".ch", c2), rows));
+
+    // Acceso a la planificación del siguiente mes
+    const nextB = S.model.budget.months.map(m => m.key).find(m => m > nowMonth()) || S.model.budget.months.map(m => m.key).find(m => m >= nowMonth());
+    if (nextB) {
+      const pl = document.createElement("button"); pl.type = "button"; pl.className = "counter-pill free";
+      pl.innerHTML = `<span>💡 Consejos y referencias para presupuestar ${MES[+nextB.split("-")[1] - 1]}</span><b>›</b>`;
+      pl.onclick = () => { S.month = nextB; S.budgetSeg = "Plan"; go("presupuesto"); };
+      v.appendChild(pl);
+    }
 
     // Evolución mensual
     const tm = months.filter(m => m <= todayISO().slice(0, 7)).slice(-12);
@@ -765,15 +1186,15 @@
   function openSheet(title, body) {
     $("#sheetTitle").textContent = title;
     const b = $("#sheetBody"); b.innerHTML = ""; b.appendChild(body);
-    $("#sheet").hidden = false; document.body.style.overflow = "hidden";
+    $("#sheet").hidden = false; document.body.style.overflow = "hidden"; document.body.classList.add("sheet-open");
     history.pushState({ sheet: 1 }, "");
   }
   function closeSheet() {
     if ($("#sheet").hidden) return;
-    $("#sheet").hidden = true; document.body.style.overflow = "";
+    $("#sheet").hidden = true; document.body.style.overflow = ""; document.body.classList.remove("sheet-open");
     if (history.state && history.state.sheet) history.back();
   }
-  window.addEventListener("popstate", () => { if (!$("#sheet").hidden) { $("#sheet").hidden = true; document.body.style.overflow = ""; } });
+  window.addEventListener("popstate", () => { if (!$("#sheet").hidden) { $("#sheet").hidden = true; document.body.style.overflow = ""; document.body.classList.remove("sheet-open"); } });
 
   // ── Login, selección de archivo y ajustes ────────────────
   function showLogin() {
@@ -855,6 +1276,7 @@
         ${S.queue.length ? `<div class="xsmall" style="color:var(--warn)">${S.queue.length} cambio(s) pendiente(s) de subir</div>` : ""}</div>
       <button class="btn" id="sRef" type="button">Actualizar desde el Excel</button><div style="height:10px"></div>
       ${S.file && S.file.webUrl ? `<a class="btn secondary" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box" href="${esc(S.file.webUrl)}" target="_blank" rel="noopener">Abrir el Excel en OneDrive</a><div style="height:10px"></div>` : ""}
+      <label class="small" style="display:flex;gap:8px;align-items:center;margin-bottom:14px"><input type="checkbox" id="sAsk" ${st.askSavings !== false ? "checked" : ""}> Preguntarme si aparto ahorro cuando entra un ingreso no previsto</label>
       <div class="field"><label>Tema</label><select id="sTheme"><option value="auto">Automático</option><option value="light">Claro</option><option value="dark">Oscuro</option></select></div>
       ${S.mode === "graph" ? `<button class="btn secondary" id="sFile" type="button">Cambiar de archivo</button><div style="height:10px"></div>` : ""}
       <details style="margin-bottom:14px"><summary class="small muted">Conexión con Microsoft</summary>
@@ -863,8 +1285,9 @@
         <p class="xsmall muted">Dirección de redirección: <code>${esc(Auth.redirectUri())}</code></p>
         <button class="btn secondary" id="sSaveC" type="button">Guardar</button></details>
       <button class="btn danger" id="sOut" type="button">${S.mode === "demo" ? "Salir del modo demo" : "Cerrar sesión"}</button>
-      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.3</p>`;
+      <p class="xsmall muted" style="text-align:center">Mis Finanzas · v1.5</p>`;
     $("#sTheme", body).value = st.theme || "auto";
+    $("#sAsk", body).onchange = e => saveSettings({ askSavings: e.target.checked });
     $("#sTheme", body).onchange = e => { saveSettings({ theme: e.target.value }); applyTheme(); render(); };
     $("#sAuth", body).value = Auth.cfg().authority;
     $("#sRef", body).onclick = () => { closeSheet(); refresh(); };
